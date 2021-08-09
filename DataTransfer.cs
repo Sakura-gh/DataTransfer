@@ -152,7 +152,7 @@ namespace DataTransfer
             this.channelReader = channelReader;
         }
 
-        public async ValueTask<List<Message>> PullAsync()
+        public async Task<List<Message>> PullAsync()
         {
             return await channelReader.ReadAsync();
         }
@@ -160,32 +160,52 @@ namespace DataTransfer
 
     public abstract class Reader
     {
-        protected Producer producer { get;  set; }
+        private Producer producer { get; set; }
+        
+        // messageList: a buffer to store messages
+        private List<Message> messageList = new List<Message>();
+
+        public void addMessage(Message message)
+        {
+            messageList.Add(message);
+        }
+        public async Task sendMessages()
+        {
+            await producer.PushAsync(messageList);
+            // clear the buffer
+            messageList.Clear();
+        }
+
         // need to be implemented
-        public abstract void readAndProduce(MemoryStream memoryStream);
+        public abstract Task readAndProduceAsync(MemoryStream memoryStream);
     }
 
     public abstract class Writer
     {
-        protected Consumer consumer { get; set; }
+        private Consumer consumer { get; set; }
+
+        public async Task<List<Message>> getMessages()
+        {
+            List<Message> messages = await consumer.PullAsync();
+            return messages;
+        }
         // need to be implemented
-        public abstract void consumeAndWrite();
+        public abstract Task consumeAndWriteAsync();
     }
 
     public class myReader : Reader
     {
-        public override async void readAndProduce(MemoryStream memoryStream)
+        public override async Task readAndProduceAsync(MemoryStream memoryStream)
         {
             // 1. parse the memoryStream to messages
             string stream2string = Encoding.ASCII.GetString(memoryStream.ToArray());
             var lines = stream2string.Split("\n").ToList();
             lines.RemoveAt(0);
             lines.RemoveAt(lines.Count() - 1);
-            var tenantAsnList = new List<Message>();
             foreach (var line in lines)
             {
                 string[] splitArray = line.Split(",");
-                tenantAsnList.Add(
+                addMessage(
                     new TenantAsn
                     {
                         tenantId = splitArray[0],
@@ -197,17 +217,17 @@ namespace DataTransfer
                 );
             }
             // 2. produce each message to channel
-            await producer.PushAsync(tenantAsnList);
+            await sendMessages();
         }
 
     }
 
-    //public class myWriter : Writer
-    //{
-    //    public override void consumeAndWrite()
-    //    {
-    //        // 1. consume the messageList from channel
-    //        List<TenantAsn> tenantAsnList = consumer.PullAsync();
-    //    }
-    //}
+    public class myWriter : Writer
+    {
+        public override async Task consumeAndWriteAsync()
+        {
+            // 1. consume the messageList from channel
+            List<Message> tenantAsnList = await getMessages();
+        }
+    }
 }
