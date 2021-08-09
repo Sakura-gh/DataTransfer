@@ -181,7 +181,7 @@ namespace DataTransfer
             var lines = stream2string.Split("\n").ToList();
             lines.RemoveAt(0);
             lines.RemoveAt(lines.Count() - 1);
-            var tenantAsnList = new List<TenantAsn>();
+            var tenantAsnList = new List<Message>();
             foreach (var line in lines)
             {
                 string[] splitArray = line.Split(",");
@@ -202,12 +202,12 @@ namespace DataTransfer
 
     }
 
-    public class myWriter : Writer
-    {
-        public override void consumeAndWrite()
-        {
-            // 1. consume the messageList from channel
-            List<TenantAsn> tenantAsnList = consumer.PullAsync();
-        }
-    }
+    //public class myWriter : Writer
+    //{
+    //    public override void consumeAndWrite()
+    //    {
+    //        // 1. consume the messageList from channel
+    //        List<TenantAsn> tenantAsnList = consumer.PullAsync();
+    //    }
+    //}
 }
