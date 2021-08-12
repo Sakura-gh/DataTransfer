@@ -116,7 +116,7 @@ namespace DataTransfer
 
         private async Task readSlices(Queue<DataSlice> dataSlices)
         {
-            await parallelForEachAsync<DataSlice>(dataSlices, readTask, 5);
+            await parallelForEachAsync<DataSlice>(dataSlices, readTask, 3);
        
         }
 
@@ -124,13 +124,14 @@ namespace DataTransfer
         {
             using (var memoryStream = new MemoryStream())
             {
-                TimeLogger.startTimeLogger();
+                //TimeLogger.startTimeLogger();
                 // 1. get the memory stream from input blob
                 // 为了避免由于竞争给inputBlob加锁导致的时间损耗，这里每个slice都单独创建一个新的inputBlob
                 await getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize);
                 // 2. read and parse memory stream, put it into the channel
                 await reader.readAndProduceAsync(memoryStream);
-                TimeLogger.stopTimeLogger("data slice complete: " + dataSlice.id);
+                TimeLogger.Log("data slice download: " + dataSlice.id);
+                //TimeLogger.stopTimeLogger("data slice complete: " + dataSlice.id);
             }
         }
 
@@ -138,7 +139,16 @@ namespace DataTransfer
         private async Task parallelWriteAsync()
         {
             // 暂时只读第一块的数据
-            await writer.consumeAndWriteAsync();
+            //await writer.consumeAndWriteAsync();
+            List<int> a = new List<int>();
+            for (int i = 0; i < sliceNum; i++)
+            {
+                a.Add(i);
+            }
+            await parallelForEachAsync<int>(a, async (i) => {
+                await writer.consumeAndWriteAsync();
+                TimeLogger.Log("upload times: " + i);
+            }, 2);
         }
 
         public Task parallelForEachAsync<T>(IEnumerable<T> source, Func<T, Task> funcBody, int maxDoP = 10)
@@ -313,20 +323,15 @@ namespace DataTransfer
 
     public class myWriter : Writer<TenantAsn>
     {
-        private long cnt = 0;
         public override async Task consumeAndWriteAsync()
         {
             // 1. consume the messageList from channel
             List<TenantAsn> tenantAsnList = await getMessages();
-            TimeLogger.Log("writer: count :" + tenantAsnList.Count());
-            TimeLogger.Log("writer: first: " + tenantAsnList[0]);
             // 2. upload
             CloudBlockBlob outputBlob = getOutputBlob();
-            for (int i = 0; i < tenantAsnList.Count(); i++)
-            {
-                await outputBlob.UploadTextAsync(JsonConvert.SerializeObject(tenantAsnList[i]));
-                TimeLogger.Log("upload times: " + cnt++);
-            }
+            String s = JsonConvert.SerializeObject(tenantAsnList);
+            await outputBlob.UploadTextAsync(s);
+            TimeLogger.Log("upload content : " + s);
         }
 
         private CloudBlockBlob getOutputBlob()
