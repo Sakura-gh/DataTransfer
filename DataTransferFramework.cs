@@ -15,10 +15,14 @@ using System.Text;
 using System.Linq;
 using Newtonsoft.Json;
 using System.Collections.Concurrent;
+using System.Reflection;
 
 namespace DataTransfer
 {
-    public class DataTransferFramework<T> where T : Message
+    public class DataTransferFramework<T, R, W> 
+        where T : Message
+        where R : Reader<T>, new()
+        where W : Writer<T>, new()
     {
         private Reader<T> reader;
         private Writer<T> writer;
@@ -34,6 +38,7 @@ namespace DataTransfer
         {
             this.reader = reader;
             this.writer = writer;
+            
         }
 
         public void start()
@@ -60,6 +65,37 @@ namespace DataTransfer
             };
             this.channel = Channel.CreateBounded<List<T>>(channelOptions);
         }
+
+        private R getNewReader()
+        {
+            var r = new R();
+            r.setProducer(producer);
+            return r;
+        }
+
+        private W getNewWriter()
+        {
+            var w = new W();
+            w.setConsumer(this.consumer);
+            return w;
+        }
+
+        //private R getNewReader()
+        //{
+        //    return DeepClone<R>((R)this.reader);
+        //}
+
+        //private W getNewWriter()
+        //{
+        //    return DeepClone<W>((W)this.writer);
+        //}
+
+        //private C DeepClone<C>(C source)
+        //{
+        //    String s = JsonConvert.SerializeObject(source);
+        //    TimeLogger.Log("object: " + s);
+        //    return JsonConvert.DeserializeObject<C>(s);
+        //}
 
         // parallel + async => read
         private async Task parallelReadAsync()
@@ -116,7 +152,7 @@ namespace DataTransfer
 
         private async Task readSlices(Queue<DataSlice> dataSlices)
         {
-            await parallelForEachAsync<DataSlice>(dataSlices, readTask, 3);
+            await parallelForEachAsync<DataSlice>(dataSlices, readTask, 4);
        
         }
 
@@ -129,8 +165,11 @@ namespace DataTransfer
                 // 为了避免由于竞争给inputBlob加锁导致的时间损耗，这里每个slice都单独创建一个新的inputBlob
                 await getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize);
                 // 2. read and parse memory stream, put it into the channel
-                await reader.readAndProduceAsync(memoryStream);
-                TimeLogger.Log("data slice download: " + dataSlice.id);
+                TimeLogger.Log("download slice: " + dataSlice.id);
+                //await reader.readAndProduceAsync(memoryStream);
+                //await getNewReader().readAndProduceAsync(memoryStream);
+                await getNewReader().readAndProduceAsync(memoryStream);
+                TimeLogger.Log("parse and produce slice: " + dataSlice.id);
                 //TimeLogger.stopTimeLogger("data slice complete: " + dataSlice.id);
             }
         }
@@ -138,22 +177,22 @@ namespace DataTransfer
         // parallel + async => write
         private async Task parallelWriteAsync()
         {
-            // 暂时只读第一块的数据
-            //await writer.consumeAndWriteAsync();
             List<int> a = new List<int>();
             for (int i = 0; i < sliceNum; i++)
             {
                 a.Add(i);
             }
             await parallelForEachAsync<int>(a, async (i) => {
-                await writer.consumeAndWriteAsync();
+                //await writer.consumeAndWriteAsync();
+                await getNewWriter().consumeAndWriteAsync();
+                //await getNewWriter().consumeAndWriteAsync();
                 TimeLogger.Log("upload times: " + i);
             }, 2);
         }
 
-        public Task parallelForEachAsync<T>(IEnumerable<T> source, Func<T, Task> funcBody, int maxDoP = 10)
+        public Task parallelForEachAsync<U>(IEnumerable<U> source, Func<U, Task> funcBody, int maxDoP = 10)
         {
-            async Task AwaitPartition(IEnumerator<T> partition)
+            async Task AwaitPartition(IEnumerator<U> partition)
             {
                 using (partition)
                 {
@@ -258,7 +297,7 @@ namespace DataTransfer
         {
             this.producer = producer;
         }
-        
+
         public async Task sendMessagesAsync(List<T> messages)
         {
             await producer.PushAsync(messages);
@@ -296,21 +335,27 @@ namespace DataTransfer
             List<TenantAsn> tenantAsnList = new List<TenantAsn>();
 
             var lines = stream2string.Split("\n").ToList();
-            //lines.RemoveAt(0);
+            lines.RemoveAt(0);
             lines.RemoveAt(lines.Count() - 1);
             foreach (var line in lines)
             {
                 string[] splitArray = line.Split(",");
-                tenantAsnList.Add(
-                    new TenantAsn
-                    {
-                        tenantId = splitArray[0],
-                        asn = splitArray[1],
-                        requestCount = splitArray[2],
-                        requestBytes = splitArray[3],
-                        responseBytes = splitArray[4]
-                    }
-                );
+                try
+                {
+                    tenantAsnList.Add(
+                        new TenantAsn
+                        {
+                            tenantId = splitArray[0],
+                            asn = splitArray[1],
+                            requestCount = splitArray[2],
+                            requestBytes = splitArray[3],
+                            responseBytes = splitArray[4]
+                        }
+                    );
+                } catch (Exception e)
+                {
+                    TimeLogger.Log(line + ": " + e.Message);
+                }
             }
             // 2. produce each message to channel
             // 消息队列是一个典型的异步方式，无需加await，本质上就是本线程通知

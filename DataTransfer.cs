@@ -20,7 +20,7 @@ namespace DataTransfer
             TimeLogger.setLogger(log);
             var reader = new myReader();
             var writer = new myWriter();
-            DataTransferFramework<TenantAsn> dataTransfer = new DataTransferFramework<TenantAsn>(reader, writer);
+            DataTransferFramework<TenantAsn, myReader, myWriter> dataTransfer = new DataTransferFramework<TenantAsn, myReader, myWriter>(reader, writer);
             log.LogInformation("data transfer begin");
             dataTransfer.start();
             log.LogInformation("data transfer end");
