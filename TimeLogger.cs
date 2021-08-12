@@ -33,5 +33,15 @@ namespace DataTransfer
             logger.LogInformation(msg + ": spends " + stopWatch.ElapsedMilliseconds + " ms.");
             return true;
         }
+
+        public static bool Log(string msg)
+        {
+            if (logger == null)
+            {
+                return false;
+            }
+            logger.LogInformation(msg);
+            return true;
+        }
     }
 }
