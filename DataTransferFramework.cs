@@ -24,8 +24,6 @@ namespace DataTransfer
         where R : Reader<T>, new()
         where W : Writer<T>, new()
     {
-        private Reader<T> reader;
-        private Writer<T> writer;
         private Channel<List<T>> channel;
         private Producer<T> producer;
         private Consumer<T> consumer;
@@ -34,12 +32,7 @@ namespace DataTransfer
         // 用于保存数据分片时只截取了一半的记录
         private List<PartialRecord> partialRecords = new List<PartialRecord>();
 
-        public DataTransferFramework(Reader<T> reader, Writer<T> writer)
-        {
-            this.reader = reader;
-            this.writer = writer;
-            
-        }
+        public DataTransferFramework() { }
 
         public void start()
         {
@@ -47,19 +40,66 @@ namespace DataTransfer
             initChannel();
             this.producer = new Producer<T>(this.channel.Writer);
             this.consumer = new Consumer<T>(this.channel.Reader);
-            // 2. 将producer和consumer赋值给reader和writer，使其变为可执行代码
-            this.reader.setProducer(this.producer);
-            this.writer.setConsumer(this.consumer);
-            // 3. 执行并发读和写的线程池(起多个线程分别执行reader和writer的核心业务)
+            // 2. 执行并发读和写的线程池(起多个线程分别执行reader和writer的核心业务)
+            // 每个线程新建一个reader/writer，避免多线程在reader/writer上竞争导致死锁
             Task read = parallelReadAsync();
             Task write = parallelWriteAsync();
             //Task.WaitAll(new Task[] { read, write });
             Task.WhenAll(new List<Task> { read, write }).Wait();
         }
 
+        public void testSequentialExecute()
+        {
+            // 1. get input blob
+            CloudBlockBlob inputBlob = getBlob("TenantMapping/TenantAsnMapping_2021-07-31.csv");
+
+            // 2. get output blob
+            CloudBlockBlob outputBlob = getBlob("TenantMapping/TenantAsnMapping_2021-07-31_test.txt");
+
+            // 2. get data slices
+            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
+
+            while (sliceQueue.Count() > 0)
+            {
+                using (var memoryStream = new MemoryStream())
+                {
+                    DataSlice slice = sliceQueue.Dequeue();
+                    inputBlob.DownloadRangeToStreamAsync(memoryStream, slice.offset, slice.realSize).Wait();
+                    string stream2string = Encoding.ASCII.GetString(memoryStream.ToArray());
+                    List<TenantAsn> tenantAsnList = new List<TenantAsn>();
+                    var lines = stream2string.Split("\n").ToList();
+                    lines.RemoveAt(0);
+                    lines.RemoveAt(lines.Count() - 1);
+                    foreach (var line in lines)
+                    {
+                        string[] splitArray = line.Split(",");
+                        try
+                        {
+                            tenantAsnList.Add(
+                                new TenantAsn
+                                {
+                                    tenantId = splitArray[0],
+                                    asn = splitArray[1],
+                                    requestCount = splitArray[2],
+                                    requestBytes = splitArray[3],
+                                    responseBytes = splitArray[4]
+                                }
+                            );
+                        }
+                        catch (Exception e)
+                        {
+                            TimeLogger.Log(line + ": " + e.Message);
+                        }
+                    }
+                    String s = JsonConvert.SerializeObject(tenantAsnList);
+                    outputBlob.UploadTextAsync(s).Wait();
+                }
+            }
+        }
+
         private void initChannel()
         {
-            var channelOptions = new BoundedChannelOptions(20)
+            var channelOptions = new BoundedChannelOptions(10)
             {
                 FullMode = BoundedChannelFullMode.Wait
             };
@@ -110,6 +150,19 @@ namespace DataTransfer
             await readSlices(sliceQueue);
         }
 
+        private CloudBlockBlob getBlob(string name)
+        {
+            string storageConnectionString = System.Environment.GetEnvironmentVariable("AzureWebJobsStorage");
+            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(storageConnectionString);
+
+            CloudBlobClient client = storageAccount.CreateCloudBlobClient();
+            CloudBlobContainer container = client.GetContainerReference("shdprod");
+
+            CloudBlockBlob inputBlob = container.GetBlockBlobReference(name);
+
+            return inputBlob;
+        }
+
         private CloudBlockBlob getInputBlob()
         {
             string storageConnectionString = System.Environment.GetEnvironmentVariable("AzureWebJobsStorage");
@@ -118,7 +171,8 @@ namespace DataTransfer
             CloudBlobClient client = storageAccount.CreateCloudBlobClient();
             CloudBlobContainer container = client.GetContainerReference("shdprod");
 
-            string input = "TenantMapping/TenantAsnMapping_test.csv";
+            string input = "TenantMapping/TenantAsnMapping_2021-07-31.csv";
+            //string input = "TenantMapping/TenantAsnMapping_test.csv";
             CloudBlockBlob inputBlob = container.GetBlockBlobReference(input);
 
             return inputBlob;
@@ -128,8 +182,8 @@ namespace DataTransfer
         {
             inputBlob.FetchAttributesAsync().Wait();
             // 16 MB chunk
-            //int BUFFER_SIZE = 16 * 1024 * 1024;
-            int BUFFER_SIZE = 1024;
+            int BUFFER_SIZE = 16 * 1024 * 1024;
+            //int BUFFER_SIZE = 1024;
             // blob还剩下多少data
             long blobRemainingSize = inputBlob.Properties.Length;
             // sliceQueue里保存着给每个线程分配的任务，blob读取的起始位置offset和读取的大小realSize
@@ -152,7 +206,7 @@ namespace DataTransfer
 
         private async Task readSlices(Queue<DataSlice> dataSlices)
         {
-            await parallelForEachAsync<DataSlice>(dataSlices, readTask, 4);
+            await parallelForEachAsync<DataSlice>(dataSlices, readTask, 10);
        
         }
 
@@ -160,7 +214,7 @@ namespace DataTransfer
         {
             using (var memoryStream = new MemoryStream())
             {
-                //TimeLogger.startTimeLogger();
+                TimeLogger.startTimeLogger();
                 // 1. get the memory stream from input blob
                 // 为了避免由于竞争给inputBlob加锁导致的时间损耗，这里每个slice都单独创建一个新的inputBlob
                 await getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize);
@@ -169,8 +223,8 @@ namespace DataTransfer
                 //await reader.readAndProduceAsync(memoryStream);
                 //await getNewReader().readAndProduceAsync(memoryStream);
                 await getNewReader().readAndProduceAsync(memoryStream);
-                TimeLogger.Log("parse and produce slice: " + dataSlice.id);
-                //TimeLogger.stopTimeLogger("data slice complete: " + dataSlice.id);
+                //TimeLogger.Log("parse and produce slice: " + dataSlice.id);
+                TimeLogger.stopTimeLogger("poduce slice: " + dataSlice.id);
             }
         }
 
@@ -186,8 +240,8 @@ namespace DataTransfer
                 //await writer.consumeAndWriteAsync();
                 await getNewWriter().consumeAndWriteAsync();
                 //await getNewWriter().consumeAndWriteAsync();
-                TimeLogger.Log("upload times: " + i);
-            }, 2);
+                TimeLogger.Log("upload slice: " + i);
+            }, 6);
         }
 
         public Task parallelForEachAsync<U>(IEnumerable<U> source, Func<U, Task> funcBody, int maxDoP = 10)
@@ -376,7 +430,9 @@ namespace DataTransfer
             CloudBlockBlob outputBlob = getOutputBlob();
             String s = JsonConvert.SerializeObject(tenantAsnList);
             await outputBlob.UploadTextAsync(s);
-            TimeLogger.Log("upload content : " + s);
+            tenantAsnList = null;
+            GC.Collect();
+            //TimeLogger.Log("upload content : " + s);
         }
 
         private CloudBlockBlob getOutputBlob()
@@ -387,7 +443,8 @@ namespace DataTransfer
             CloudBlobClient client = storageAccount.CreateCloudBlobClient();
             CloudBlobContainer container = client.GetContainerReference("shdprod");
 
-            string output = "TenantMapping/TenantAsnMapping_test.txt";
+            string output = "TenantMapping/TenantAsnMapping_2021-07-31_test.txt";
+            //string output = "TenantMapping/TenantAsnMapping_test.txt";
             CloudBlockBlob outputBlob = container.GetBlockBlobReference(output);
 
             return outputBlob;
