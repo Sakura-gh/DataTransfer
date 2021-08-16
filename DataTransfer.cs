@@ -21,7 +21,7 @@ namespace DataTransfer
             DataTransferFramework<TenantAsn, myReader, myWriter> dataTransfer = new DataTransferFramework<TenantAsn, myReader, myWriter>();
             log.LogInformation("data transfer begin");
             dataTransfer.start();
-            //dataTransfer.testSequentialExecute();
+            //dataTransfer.testSequentialExecuteParallel();
             log.LogInformation("data transfer end");
             return (ActionResult)new OkObjectResult(new { Result = "Success" });
         }

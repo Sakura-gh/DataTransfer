@@ -16,6 +16,7 @@ using System.Linq;
 using Newtonsoft.Json;
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Collections;
 
 namespace DataTransfer
 {
@@ -29,8 +30,6 @@ namespace DataTransfer
         private Consumer<T> consumer;
 
         private long sliceNum;
-        // 用于保存数据分片时只截取了一半的记录
-        private List<PartialRecord> partialRecords = new List<PartialRecord>();
 
         public DataTransferFramework() { }
 
@@ -44,7 +43,6 @@ namespace DataTransfer
             // 每个线程新建一个reader/writer，避免多线程在reader/writer上竞争导致死锁
             Task read = parallelReadAsync();
             Task write = parallelWriteAsync();
-            //Task.WaitAll(new Task[] { read, write });
             Task.WhenAll(new List<Task> { read, write }).Wait();
         }
 
@@ -97,9 +95,70 @@ namespace DataTransfer
             }
         }
 
+        public void testSequentialExecuteParallel()
+        {
+            // 1. get input blob
+            CloudBlockBlob inputBlob = getBlob("TenantMapping/TenantAsnMapping_2021-07-31.csv");
+
+            // 2. get output blob
+            CloudBlockBlob outputBlob = getBlob("TenantMapping/TenantAsnMapping_2021-07-31_test.txt");
+
+            // 2. get data slices
+            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
+
+            Parallel.ForEach(sliceQueue,
+                new ParallelOptions()
+                {
+                    // 最大的并发度
+                    MaxDegreeOfParallelism = 5
+                },
+                (slice) =>
+                {
+                    using (var memoryStream = new MemoryStream())
+                    {
+                        try {
+                            getBlob("TenantMapping/TenantAsnMapping_2021-07-31.csv").DownloadRangeToStreamAsync(memoryStream, slice.offset, slice.realSize).Wait();
+                            string stream2string = Encoding.ASCII.GetString(memoryStream.ToArray());
+                            List<TenantAsn> tenantAsnList = new List<TenantAsn>();
+                            var lines = stream2string.Split("\n").ToList();
+                            lines.RemoveAt(0);
+                            lines.RemoveAt(lines.Count() - 1);
+                            foreach (var line in lines)
+                            {
+                                string[] splitArray = line.Split(",");
+                                try
+                                {
+                                    tenantAsnList.Add(
+                                        new TenantAsn
+                                        {
+                                            tenantId = splitArray[0],
+                                            asn = splitArray[1],
+                                            requestCount = splitArray[2],
+                                            requestBytes = splitArray[3],
+                                            responseBytes = splitArray[4]
+                                        }
+                                    );
+                                }
+                                catch (Exception e)
+                                {
+                                    TimeLogger.Log(line + ": " + e.Message);
+                                }
+                            }
+                            String s = JsonConvert.SerializeObject(tenantAsnList);
+                            getBlob("TenantMapping/TenantAsnMapping_2021-07-31_test.txt").UploadTextAsync(s).Wait();
+                            TimeLogger.Log("slice " + slice.id);
+                        } catch (Exception e)
+                        {
+                            TimeLogger.Log("slice " + slice.id + ": " + e.Message);
+                        }
+                    }
+                }
+            );
+        }
+
         private void initChannel()
         {
-            var channelOptions = new BoundedChannelOptions(10)
+            var channelOptions = new BoundedChannelOptions(80)
             {
                 FullMode = BoundedChannelFullMode.Wait
             };
@@ -120,22 +179,17 @@ namespace DataTransfer
             return w;
         }
 
-        //private R getNewReader()
-        //{
-        //    return DeepClone<R>((R)this.reader);
-        //}
+        private void parallelRead()
+        {
+            // 1. get input blob
+            CloudBlockBlob inputBlob = getInputBlob();
 
-        //private W getNewWriter()
-        //{
-        //    return DeepClone<W>((W)this.writer);
-        //}
+            // 2. get data slices
+            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
 
-        //private C DeepClone<C>(C source)
-        //{
-        //    String s = JsonConvert.SerializeObject(source);
-        //    TimeLogger.Log("object: " + s);
-        //    return JsonConvert.DeserializeObject<C>(s);
-        //}
+            // 3. start read data slices and put them into channel, parallel
+            readSlices(sliceQueue);
+        }
 
         // parallel + async => read
         private async Task parallelReadAsync()
@@ -147,7 +201,7 @@ namespace DataTransfer
             Queue<DataSlice> sliceQueue= getDataSlices(inputBlob);
 
             // 3. start read data slices and put them into channel, parallel and async
-            await readSlices(sliceQueue);
+            await readSlicesAsync(sliceQueue);
         }
 
         private CloudBlockBlob getBlob(string name)
@@ -182,7 +236,7 @@ namespace DataTransfer
         {
             inputBlob.FetchAttributesAsync().Wait();
             // 16 MB chunk
-            int BUFFER_SIZE = 16 * 1024 * 1024;
+            int BUFFER_SIZE = 1 * 1024 * 1024;
             //int BUFFER_SIZE = 1024;
             // blob还剩下多少data
             long blobRemainingSize = inputBlob.Properties.Length;
@@ -204,13 +258,37 @@ namespace DataTransfer
             return sliceQueue;
         }
 
-        private async Task readSlices(Queue<DataSlice> dataSlices)
+        private void readSlices(Queue<DataSlice> dataSlices)
         {
-            await parallelForEachAsync<DataSlice>(dataSlices, readTask, 10);
+            TimeLogger.startTimeLogger();
+            Parallel.ForEach(dataSlices,
+                new ParallelOptions()
+                {
+                    // 最大的并发度
+                    MaxDegreeOfParallelism = 10
+                },
+                (dataSlice) =>
+                {
+                    using (var memoryStream = new MemoryStream())
+                    {
+                        TimeLogger.startTimeLogger();
+                        getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize).Wait();
+                        TimeLogger.Log("download slice: " + dataSlice.id);
+                        getNewReader().readAndProduceAsync(memoryStream).Wait();
+                        TimeLogger.stopTimeLogger("poduce slice: " + dataSlice.id);
+                    }
+                }
+            );
+            TimeLogger.stopTimeLogger("ParallelDownloadBlob");
+        }
+
+        private async Task readSlicesAsync(Queue<DataSlice> dataSlices)
+        {
+            await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, 10);
        
         }
 
-        private async Task readTask(DataSlice dataSlice)
+        private async Task readTaskAsync(DataSlice dataSlice)
         {
             using (var memoryStream = new MemoryStream())
             {
@@ -285,21 +363,6 @@ namespace DataTransfer
             }
         }
 
-        private class PartialRecord
-        {
-            private string front;
-            private string end;
-
-            public void setFront(String front)
-            {
-                this.front = front;
-            }
-
-            public void setEnd(String end)
-            {
-                this.end = end;
-            }
-        }
     }
 
     //public abstract class Message { }
@@ -380,6 +443,9 @@ namespace DataTransfer
 
     public class myReader: Reader<TenantAsn>
     {
+        // 用于保存数据分片时只截取了一半的记录
+        private Hashtable partialRecordTable = Hashtable.Synchronized(new Hashtable());
+
         public override async Task readAndProduceAsync(MemoryStream memoryStream)
         {
             // 1. parse the memoryStream to messages
@@ -389,6 +455,7 @@ namespace DataTransfer
             List<TenantAsn> tenantAsnList = new List<TenantAsn>();
 
             var lines = stream2string.Split("\n").ToList();
+
             lines.RemoveAt(0);
             lines.RemoveAt(lines.Count() - 1);
             foreach (var line in lines)
