@@ -20,8 +20,9 @@ namespace DataTransfer
             TimeLogger.setLogger(log);
             DataTransferFramework<TenantAsn, myReader, myWriter> dataTransfer = new DataTransferFramework<TenantAsn, myReader, myWriter>();
             log.LogInformation("data transfer begin");
-            dataTransfer.start();
-            //dataTransfer.testSequentialExecuteParallel();
+            //dataTransfer.start();
+            dataTransfer.testSequentialExecuteParallel();
+            //dataTransfer.testNoChannel();
             log.LogInformation("data transfer end");
             return (ActionResult)new OkObjectResult(new { Result = "Success" });
         }

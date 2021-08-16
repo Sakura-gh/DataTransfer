@@ -163,6 +163,8 @@ namespace DataTransfer
                 FullMode = BoundedChannelFullMode.Wait
             };
             this.channel = Channel.CreateBounded<List<T>>(channelOptions);
+
+            //this.channel = Channel.CreateUnbounded<List<T>>();
         }
 
         private R getNewReader()
@@ -282,9 +284,34 @@ namespace DataTransfer
             TimeLogger.stopTimeLogger("ParallelDownloadBlob");
         }
 
+        public void testNoChannel()
+        {
+            // 1. get input blob
+            CloudBlockBlob inputBlob = getInputBlob();
+
+            // 2. get data slices
+            Queue<DataSlice> dataSlices = getDataSlices(inputBlob);
+
+            // 3. test without channel
+            parallelForEachAsync<DataSlice>(dataSlices, readAndWriteTask, 10).Wait();
+        }
+
+        private async Task readAndWriteTask(DataSlice dataSlice)
+        {
+            using (var memoryStream = new MemoryStream())
+            {
+                TimeLogger.startTimeLogger();
+                await getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize);
+                List<T> dataList = getNewReader().readData(memoryStream);
+                String s = JsonConvert.SerializeObject(dataList);
+                await getBlob("TenantMapping/TenantAsnMapping_2021-07-31_test.txt").UploadTextAsync(s);
+                TimeLogger.stopTimeLogger("slice " + dataSlice.id + " completed");
+            }
+        }
+
         private async Task readSlicesAsync(Queue<DataSlice> dataSlices)
         {
-            await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, 10);
+            await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, 1);
        
         }
 
@@ -319,7 +346,7 @@ namespace DataTransfer
                 await getNewWriter().consumeAndWriteAsync();
                 //await getNewWriter().consumeAndWriteAsync();
                 TimeLogger.Log("upload slice: " + i);
-            }, 6);
+            }, 1);
         }
 
         public Task parallelForEachAsync<U>(IEnumerable<U> source, Func<U, Task> funcBody, int maxDoP = 10)
@@ -420,8 +447,19 @@ namespace DataTransfer
             await producer.PushAsync(messages);
         }
 
+        public async Task readAndProduceAsync(MemoryStream memoryStream)
+        {
+            // 1. parse the memoryStream to messages
+            List<T> dataList = readData(memoryStream);
+            // 2. produce each message to channel
+            // 消息队列是一个典型的异步方式，无需加await，本质上就是本线程通知
+            // 要发消息了，然后本线程的任务就完成结束了，接下来具体消息的发送是
+            // 异步的，由新起的一个线程来完成
+            await sendMessagesAsync(dataList);
+        }
+
         // need to be implemented
-        public abstract Task readAndProduceAsync(MemoryStream memoryStream);
+        public abstract List<T> readData(MemoryStream memoryStream);
     }
 
     public abstract class Writer<T> where T : Message
@@ -446,9 +484,8 @@ namespace DataTransfer
         // 用于保存数据分片时只截取了一半的记录
         private Hashtable partialRecordTable = Hashtable.Synchronized(new Hashtable());
 
-        public override async Task readAndProduceAsync(MemoryStream memoryStream)
+        public override List<TenantAsn> readData(MemoryStream memoryStream)
         {
-            // 1. parse the memoryStream to messages
             string stream2string = Encoding.ASCII.GetString(memoryStream.ToArray());
             //TimeLogger.Log(stream2string);
 
@@ -478,11 +515,8 @@ namespace DataTransfer
                     TimeLogger.Log(line + ": " + e.Message);
                 }
             }
-            // 2. produce each message to channel
-            // 消息队列是一个典型的异步方式，无需加await，本质上就是本线程通知
-            // 要发消息了，然后本线程的任务就完成结束了，接下来具体消息的发送是
-            // 异步的，由新起的一个线程来完成
-            await sendMessagesAsync(tenantAsnList);
+
+            return tenantAsnList;
         }
 
     }
