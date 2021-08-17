@@ -314,7 +314,7 @@ namespace DataTransfer
 
         private async Task readSlicesAsync(Queue<DataSlice> dataSlices)
         {
-            await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, 8);
+            await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, 5);
 
         }
 
@@ -350,7 +350,7 @@ namespace DataTransfer
                 await getNewWriter().consumeAndWriteAsync();
                 //await getNewWriter().consumeAndWriteAsync();
                 TimeLogger.Log("upload slice: " + i);
-            }, 15);
+            }, 10);
             //W writer = getNewWriter();
             //int i = 0;
             //try

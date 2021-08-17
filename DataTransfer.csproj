@@ -4,6 +4,7 @@
     <AzureFunctionsVersion>v3</AzureFunctionsVersion>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="AsyncEnumerator" Version="4.0.2" />
     <PackageReference Include="Azure.Storage.Queues" Version="12.7.0" />
     <PackageReference Include="fastJSON" Version="2.4.0.4" />
     <PackageReference Include="Microsoft.IdentityModel.Clients.ActiveDirectory" Version="5.2.9" />
