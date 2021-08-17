@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
@@ -20,9 +20,10 @@ namespace DataTransfer
             TimeLogger.setLogger(log);
             DataTransferFramework<TenantAsn, myReader, myWriter> dataTransfer = new DataTransferFramework<TenantAsn, myReader, myWriter>();
             log.LogInformation("data transfer begin");
-            //dataTransfer.start();
-            dataTransfer.testSequentialExecuteParallel();
-            //dataTransfer.testNoChannel();
+            dataTransfer.start(); // 异步并行，含channel
+            //dataTransfer.testSequentialExecute(); // 纯串行
+            //dataTransfer.testSequentialExecuteParallel(); // 纯同步并行，无channel
+            //dataTransfer.testNoChannel(); // 异步并行，无channel
             log.LogInformation("data transfer end");
             return (ActionResult)new OkObjectResult(new { Result = "Success" });
         }

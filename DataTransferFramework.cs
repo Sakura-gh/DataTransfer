@@ -20,7 +20,7 @@ using System.Collections;
 
 namespace DataTransfer
 {
-    public class DataTransferFramework<T, R, W> 
+    public class DataTransferFramework<T, R, W>
         where T : Message
         where R : Reader<T>, new()
         where W : Writer<T>, new()
@@ -91,6 +91,7 @@ namespace DataTransfer
                     }
                     String s = JsonConvert.SerializeObject(tenantAsnList);
                     outputBlob.UploadTextAsync(s).Wait();
+                    TimeLogger.Log("slice " + slice.id);
                 }
             }
         }
@@ -110,13 +111,14 @@ namespace DataTransfer
                 new ParallelOptions()
                 {
                     // 最大的并发度
-                    MaxDegreeOfParallelism = 5
+                    MaxDegreeOfParallelism = 10
                 },
                 (slice) =>
                 {
                     using (var memoryStream = new MemoryStream())
                     {
-                        try {
+                        try
+                        {
                             getBlob("TenantMapping/TenantAsnMapping_2021-07-31.csv").DownloadRangeToStreamAsync(memoryStream, slice.offset, slice.realSize).Wait();
                             string stream2string = Encoding.ASCII.GetString(memoryStream.ToArray());
                             List<TenantAsn> tenantAsnList = new List<TenantAsn>();
@@ -147,7 +149,8 @@ namespace DataTransfer
                             String s = JsonConvert.SerializeObject(tenantAsnList);
                             getBlob("TenantMapping/TenantAsnMapping_2021-07-31_test.txt").UploadTextAsync(s).Wait();
                             TimeLogger.Log("slice " + slice.id);
-                        } catch (Exception e)
+                        }
+                        catch (Exception e)
                         {
                             TimeLogger.Log("slice " + slice.id + ": " + e.Message);
                         }
@@ -158,13 +161,13 @@ namespace DataTransfer
 
         private void initChannel()
         {
-            var channelOptions = new BoundedChannelOptions(80)
-            {
-                FullMode = BoundedChannelFullMode.Wait
-            };
-            this.channel = Channel.CreateBounded<List<T>>(channelOptions);
+            //var channelOptions = new BoundedChannelOptions(100)
+            //{
+            //    FullMode = BoundedChannelFullMode.Wait
+            //};
+            //this.channel = Channel.CreateBounded<List<T>>(channelOptions);
 
-            //this.channel = Channel.CreateUnbounded<List<T>>();
+            this.channel = Channel.CreateUnbounded<List<T>>();
         }
 
         private R getNewReader()
@@ -200,7 +203,7 @@ namespace DataTransfer
             CloudBlockBlob inputBlob = getInputBlob();
 
             // 2. get data slices
-            Queue<DataSlice> sliceQueue= getDataSlices(inputBlob);
+            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
 
             // 3. start read data slices and put them into channel, parallel and async
             await readSlicesAsync(sliceQueue);
@@ -311,8 +314,8 @@ namespace DataTransfer
 
         private async Task readSlicesAsync(Queue<DataSlice> dataSlices)
         {
-            await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, 1);
-       
+            await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, 8);
+
         }
 
         private async Task readTaskAsync(DataSlice dataSlice)
@@ -341,12 +344,26 @@ namespace DataTransfer
             {
                 a.Add(i);
             }
-            await parallelForEachAsync<int>(a, async (i) => {
+            await parallelForEachAsync<int>(a, async (i) =>
+            {
                 //await writer.consumeAndWriteAsync();
                 await getNewWriter().consumeAndWriteAsync();
                 //await getNewWriter().consumeAndWriteAsync();
                 TimeLogger.Log("upload slice: " + i);
-            }, 1);
+            }, 15);
+            //W writer = getNewWriter();
+            //int i = 0;
+            //try
+            //{
+            //    while (true)
+            //    {
+            //        await writer.consumeAndWriteAsync();
+            //        TimeLogger.Log("upload slice: " + ++i);
+            //    }
+            //} catch (Exception e)
+            //{
+            //    TimeLogger.Log("upload slice complete: " + e.Message);
+            //}
         }
 
         public Task parallelForEachAsync<U>(IEnumerable<U> source, Func<U, Task> funcBody, int maxDoP = 10)
@@ -479,7 +496,7 @@ namespace DataTransfer
         public abstract Task consumeAndWriteAsync();
     }
 
-    public class myReader: Reader<TenantAsn>
+    public class myReader : Reader<TenantAsn>
     {
         // 用于保存数据分片时只截取了一半的记录
         private Hashtable partialRecordTable = Hashtable.Synchronized(new Hashtable());
@@ -510,7 +527,8 @@ namespace DataTransfer
                             responseBytes = splitArray[4]
                         }
                     );
-                } catch (Exception e)
+                }
+                catch (Exception e)
                 {
                     TimeLogger.Log(line + ": " + e.Message);
                 }
