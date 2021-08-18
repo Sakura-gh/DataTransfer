@@ -1,9 +1,10 @@
 #### DataTransfer
 
-> Plugin: Reader (source data storage) and Writer (target data storage)
->
-> Target: just to transfer data from any two data sources
->
-> It's my project developed in Microsoft, some concepts: C#, Cosmos, Azure Blob, Azure Function
+The DataTransfer Framework is used to **transfer data between any two data sources** and is typically suitable for transferring large amounts of data when your machine has buzus in memory.
 
-the DataTransfer Framework for transfer the big data from different data source, like Azure Blob and DB. Based on plug-in ideas, you need only to extend the abstract Reader and Writer, implements the read/write method depends on the specific data source.
+It uses the pattern: `framework` + `plugin`
+
+- **Plug-ins only care about reading or writing to the data itself**. Specifically, you need to define a message class that inherits the Reader and Writer classes and implements the specific interfaces for reading and writing data. 
+- **The framework will handles all cpu issues and memory issues**. Specifically, cpu issues like multi-thread, concurrent, parallel, asynchronous, and memory issues like data sharding, and message queue.
+
+DataTransfer will provide you a Framework, and you just need to implements the Plugins.
