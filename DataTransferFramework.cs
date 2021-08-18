@@ -141,6 +141,7 @@ namespace DataTransfer
         private async Task readSlicesAsync(Queue<DataSlice> dataSlices)
         {
             int readerNum = Convert.ToInt32(Environment.GetEnvironmentVariable("ReaderNumParallelAsync"));
+            //TimeLogger.Log("readerNum: " + readerNum);
             await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, readerNum);
 
         }
@@ -166,6 +167,7 @@ namespace DataTransfer
         private async Task parallelWriteAsync()
         {
             int writerNum = Convert.ToInt32(Environment.GetEnvironmentVariable("WriterNumParallelAsync"));
+            //TimeLogger.Log("writerNum: " + writerNum);
             await parallelForEachAsync<int>(Enumerable.Range(1, this.sliceNum).ToList(), async (i) =>
             {
                 await getNewWriter().consumeAndWriteAsync();
@@ -442,7 +444,7 @@ namespace DataTransfer
         public override void writeData(List<TenantAsn> tenantAsnList)
         {
             String s = JsonConvert.SerializeObject(tenantAsnList);
-            CloudBlobUtil.getOutputBlob().UploadTextAsync(s).Wait();
+            CloudBlobUtil.getOutputBlob().UploadTextAsync(s);
             tenantAsnList = null;
             GC.Collect();
         }
