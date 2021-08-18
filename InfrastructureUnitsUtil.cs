@@ -18,7 +18,7 @@ namespace DataTransfer
         public static async Task AsnTopology()
         {
             // asn path
-            string inputPath = "...";
+            string inputPath = "TenantMapping/asn.txt";
             
             // Get the AAD credential.
             AuthenticationHeaderValue bearerToken = await GetAADCredential();
@@ -73,9 +73,6 @@ namespace DataTransfer
 
         public static async Task TenantMapping(List<TenantAsn> tenantAsnList)
         {
-            // asn path
-            string inputPath = "...";
-
             // get the AAD credential.
             AuthenticationHeaderValue bearerToken = await GetAADCredential();
 
@@ -123,7 +120,7 @@ namespace DataTransfer
             List<InfrastructureUnitDefinitions> infrastructureUnitDefinitions, 
             AuthenticationHeaderValue bearerToken)
         {
-            string postUri = "https://eventauthoringppe.trafficmanager.net/v1.0/Workloads({0})/SetInfrastructureUnits";
+            string postUri = "https://eventauthoringppe.trafficmanager.net/v1.0/Workloads(191)/SetInfrastructureUnits";
             var postContents = new StringContent(
                 JsonConvert.SerializeObject(
                     new Dictionary<string, object>
@@ -147,7 +144,7 @@ namespace DataTransfer
             Guid guid,
             AuthenticationHeaderValue bearerToken)
         {
-            string commitUri = "https://eventauthoringppe.trafficmanager.net/v1.0/Workloads({0})/CommitInfrastructureUnits";
+            string commitUri = "https://eventauthoringppe.trafficmanager.net/v1.0/Workloads(191)/CommitInfrastructureUnits";
             var commitContents = new StringContent(
                 JsonConvert.SerializeObject(
                     new Dictionary<string, object>
@@ -168,7 +165,7 @@ namespace DataTransfer
             List<TenantInfrastructureUnit> tenantInfrastructureUnits,
             AuthenticationHeaderValue bearerToken)
         {
-            string postUri = "https://eventauthoringppe.trafficmanager.net/v1.0/Workloads({0})/SetTenantInfrastructureUnits";
+            string postUri = "https://eventauthoringppe.trafficmanager.net/v1.0/Workloads(191)/SetTenantInfrastructureUnits";
             var postContents = new StringContent(
                 JsonConvert.SerializeObject(
                     new Dictionary<string, object>
@@ -192,7 +189,7 @@ namespace DataTransfer
             Guid guid,
             AuthenticationHeaderValue bearerToken)
         {
-            string commitUri = "https://eventauthoringppe.trafficmanager.net/v1.0/Workloads({0})/CommitTenantInfrastructureUnits";
+            string commitUri = "https://eventauthoringppe.trafficmanager.net/v1.0/Workloads(191)/CommitTenantInfrastructureUnits";
             var commitContents = new StringContent(
                 JsonConvert.SerializeObject(
                     new Dictionary<string, object>
@@ -225,11 +222,6 @@ namespace DataTransfer
 
             return token;
         }
-    }
-
-    public class Asn
-    {
-        public string ASN { get; set; }
     }
 
     public class InfrastructureUnitDefinitions
