@@ -1,0 +1,15 @@
+{
+    "IsEncrypted": false,
+  "Values": {
+    //"AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=exonetworkshd;AccountKey=;BlobEndpoint=https://exonetworkshd.blob.core.windows.net/;TableEndpoint=https://exonetworkshd.table.core.windows.net/;QueueEndpoint=https://exonetworkshd.queue.core.windows.net/;FileEndpoint=https://exonetworkshd.file.core.windows.net/",
+    "AzureWebJobsStorage": "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet",
+    "InputBlobPath": "TenantMapping/TenantAsnMapping_2021-07-31.csv",
+    "OutputBlobPath": "TenantMapping/TenantAsnMapping_2021-07-31_test.txt",
+    "ChannelBounded": true,
+    "ChannelLimit": 100,
+    "Buffer": 1,
+    "ReaderNumParallelAsync": 8,
+    "WriterNumParallelAsync": 15
+  }
+}
