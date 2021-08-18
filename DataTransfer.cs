@@ -90,8 +90,12 @@ namespace DataTransfer
     {
         public override void writeData(List<TenantAsn> tenantAsnList)
         {
-            String s = JsonConvert.SerializeObject(tenantAsnList);
-            CloudBlobUtil.getOutputBlob().UploadTextAsync(s);
+            //String s = JsonConvert.SerializeObject(tenantAsnList);
+            //CloudBlobUtil.getOutputBlob().UploadTextAsync(s);
+
+            // try to load data into db
+            InfrastructureUnitsUtil.TenantMapping(tenantAsnList);
+            
             tenantAsnList = null;
             GC.Collect();
         }
