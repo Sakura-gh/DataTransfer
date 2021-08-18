@@ -1,12 +1,6 @@
 ﻿using System;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Azure.WebJobs;
-using Microsoft.Azure.WebJobs.Extensions.Http;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 using Microsoft.WindowsAzure.Storage;
 using Microsoft.WindowsAzure.Storage.Blob;
 using System.Collections.Generic;
@@ -15,7 +9,6 @@ using System.Text;
 using System.Linq;
 using Newtonsoft.Json;
 using System.Collections.Concurrent;
-using System.Reflection;
 using System.Collections;
 
 namespace DataTransfer
@@ -29,7 +22,7 @@ namespace DataTransfer
         private Producer<T> producer;
         private Consumer<T> consumer;
 
-        private long sliceNum;
+        private int sliceNum;
 
         public DataTransferFramework() { }
 
@@ -46,130 +39,26 @@ namespace DataTransfer
             Task.WhenAll(new List<Task> { read, write }).Wait();
         }
 
-        public void testSequentialExecute()
+        // 使用同一个channel(producer/consumer)传输数据
+        private void initChannel()
         {
-            // 1. get input blob
-            CloudBlockBlob inputBlob = getBlob("TenantMapping/TenantAsnMapping_2021-07-31.csv");
-
-            // 2. get output blob
-            CloudBlockBlob outputBlob = getBlob("TenantMapping/TenantAsnMapping_2021-07-31_test.txt");
-
-            // 2. get data slices
-            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
-
-            while (sliceQueue.Count() > 0)
+            bool isBounded = Convert.ToBoolean(Environment.GetEnvironmentVariable("ChannelBounded"));
+            if (isBounded)
             {
-                using (var memoryStream = new MemoryStream())
+                int boundLimit = Convert.ToInt32(Environment.GetEnvironmentVariable("ChannelLimit"));
+                var channelOptions = new BoundedChannelOptions(boundLimit)
                 {
-                    DataSlice slice = sliceQueue.Dequeue();
-                    inputBlob.DownloadRangeToStreamAsync(memoryStream, slice.offset, slice.realSize).Wait();
-                    string stream2string = Encoding.ASCII.GetString(memoryStream.ToArray());
-                    List<TenantAsn> tenantAsnList = new List<TenantAsn>();
-                    var lines = stream2string.Split("\n").ToList();
-                    lines.RemoveAt(0);
-                    lines.RemoveAt(lines.Count() - 1);
-                    foreach (var line in lines)
-                    {
-                        string[] splitArray = line.Split(",");
-                        try
-                        {
-                            tenantAsnList.Add(
-                                new TenantAsn
-                                {
-                                    tenantId = splitArray[0],
-                                    asn = splitArray[1],
-                                    requestCount = splitArray[2],
-                                    requestBytes = splitArray[3],
-                                    responseBytes = splitArray[4]
-                                }
-                            );
-                        }
-                        catch (Exception e)
-                        {
-                            TimeLogger.Log(line + ": " + e.Message);
-                        }
-                    }
-                    String s = JsonConvert.SerializeObject(tenantAsnList);
-                    outputBlob.UploadTextAsync(s).Wait();
-                    TimeLogger.Log("slice " + slice.id);
-                }
+                    FullMode = BoundedChannelFullMode.Wait
+                };
+                this.channel = Channel.CreateBounded<List<T>>(channelOptions);
+            } 
+            else
+            {
+                this.channel = Channel.CreateUnbounded<List<T>>();
             }
         }
 
-        public void testSequentialExecuteParallel()
-        {
-            // 1. get input blob
-            CloudBlockBlob inputBlob = getBlob("TenantMapping/TenantAsnMapping_2021-07-31.csv");
-
-            // 2. get output blob
-            CloudBlockBlob outputBlob = getBlob("TenantMapping/TenantAsnMapping_2021-07-31_test.txt");
-
-            // 2. get data slices
-            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
-
-            Parallel.ForEach(sliceQueue,
-                new ParallelOptions()
-                {
-                    // 最大的并发度
-                    MaxDegreeOfParallelism = 10
-                },
-                (slice) =>
-                {
-                    using (var memoryStream = new MemoryStream())
-                    {
-                        try
-                        {
-                            getBlob("TenantMapping/TenantAsnMapping_2021-07-31.csv").DownloadRangeToStreamAsync(memoryStream, slice.offset, slice.realSize).Wait();
-                            string stream2string = Encoding.ASCII.GetString(memoryStream.ToArray());
-                            List<TenantAsn> tenantAsnList = new List<TenantAsn>();
-                            var lines = stream2string.Split("\n").ToList();
-                            lines.RemoveAt(0);
-                            lines.RemoveAt(lines.Count() - 1);
-                            foreach (var line in lines)
-                            {
-                                string[] splitArray = line.Split(",");
-                                try
-                                {
-                                    tenantAsnList.Add(
-                                        new TenantAsn
-                                        {
-                                            tenantId = splitArray[0],
-                                            asn = splitArray[1],
-                                            requestCount = splitArray[2],
-                                            requestBytes = splitArray[3],
-                                            responseBytes = splitArray[4]
-                                        }
-                                    );
-                                }
-                                catch (Exception e)
-                                {
-                                    TimeLogger.Log(line + ": " + e.Message);
-                                }
-                            }
-                            String s = JsonConvert.SerializeObject(tenantAsnList);
-                            getBlob("TenantMapping/TenantAsnMapping_2021-07-31_test.txt").UploadTextAsync(s).Wait();
-                            TimeLogger.Log("slice " + slice.id);
-                        }
-                        catch (Exception e)
-                        {
-                            TimeLogger.Log("slice " + slice.id + ": " + e.Message);
-                        }
-                    }
-                }
-            );
-        }
-
-        private void initChannel()
-        {
-            //var channelOptions = new BoundedChannelOptions(100)
-            //{
-            //    FullMode = BoundedChannelFullMode.Wait
-            //};
-            //this.channel = Channel.CreateBounded<List<T>>(channelOptions);
-
-            this.channel = Channel.CreateUnbounded<List<T>>();
-        }
-
+        // 每个独立的线程都要申请一个独立的reader，避免加锁抢占资源
         private R getNewReader()
         {
             var r = new R();
@@ -177,6 +66,7 @@ namespace DataTransfer
             return r;
         }
 
+        // 每个独立的线程都要申请一个独立的writer，避免加锁抢占资源
         private W getNewWriter()
         {
             var w = new W();
@@ -184,65 +74,13 @@ namespace DataTransfer
             return w;
         }
 
-        private void parallelRead()
-        {
-            // 1. get input blob
-            CloudBlockBlob inputBlob = getInputBlob();
-
-            // 2. get data slices
-            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
-
-            // 3. start read data slices and put them into channel, parallel
-            readSlices(sliceQueue);
-        }
-
-        // parallel + async => read
-        private async Task parallelReadAsync()
-        {
-            // 1. get input blob
-            CloudBlockBlob inputBlob = getInputBlob();
-
-            // 2. get data slices
-            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
-
-            // 3. start read data slices and put them into channel, parallel and async
-            await readSlicesAsync(sliceQueue);
-        }
-
-        private CloudBlockBlob getBlob(string name)
-        {
-            string storageConnectionString = System.Environment.GetEnvironmentVariable("AzureWebJobsStorage");
-            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(storageConnectionString);
-
-            CloudBlobClient client = storageAccount.CreateCloudBlobClient();
-            CloudBlobContainer container = client.GetContainerReference("shdprod");
-
-            CloudBlockBlob inputBlob = container.GetBlockBlobReference(name);
-
-            return inputBlob;
-        }
-
-        private CloudBlockBlob getInputBlob()
-        {
-            string storageConnectionString = System.Environment.GetEnvironmentVariable("AzureWebJobsStorage");
-            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(storageConnectionString);
-
-            CloudBlobClient client = storageAccount.CreateCloudBlobClient();
-            CloudBlobContainer container = client.GetContainerReference("shdprod");
-
-            string input = "TenantMapping/TenantAsnMapping_2021-07-31.csv";
-            //string input = "TenantMapping/TenantAsnMapping_test.csv";
-            CloudBlockBlob inputBlob = container.GetBlockBlobReference(input);
-
-            return inputBlob;
-        }
-
+        // 任务分片
         private Queue<DataSlice> getDataSlices(CloudBlockBlob inputBlob)
         {
             inputBlob.FetchAttributesAsync().Wait();
-            // 16 MB chunk
-            int BUFFER_SIZE = 1 * 1024 * 1024;
-            //int BUFFER_SIZE = 1024;
+            // Buffer Size: buffer MB chunk, recommand to set 1 MB
+            int buffer = Convert.ToInt32(Environment.GetEnvironmentVariable("Buffer"));
+            int BUFFER_SIZE = buffer * 1024 * 1024;
             // blob还剩下多少data
             long blobRemainingSize = inputBlob.Properties.Length;
             // sliceQueue里保存着给每个线程分配的任务，blob读取的起始位置offset和读取的大小realSize
@@ -259,113 +97,11 @@ namespace DataTransfer
                 offset += BUFFER_SIZE;
                 blobRemainingSize -= BUFFER_SIZE;
             }
-            sliceNum = sliceQueue.Count();
+            this.sliceNum = sliceQueue.Count();
             return sliceQueue;
         }
 
-        private void readSlices(Queue<DataSlice> dataSlices)
-        {
-            TimeLogger.startTimeLogger();
-            Parallel.ForEach(dataSlices,
-                new ParallelOptions()
-                {
-                    // 最大的并发度
-                    MaxDegreeOfParallelism = 10
-                },
-                (dataSlice) =>
-                {
-                    using (var memoryStream = new MemoryStream())
-                    {
-                        TimeLogger.startTimeLogger();
-                        getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize).Wait();
-                        TimeLogger.Log("download slice: " + dataSlice.id);
-                        getNewReader().readAndProduceAsync(memoryStream).Wait();
-                        TimeLogger.stopTimeLogger("poduce slice: " + dataSlice.id);
-                    }
-                }
-            );
-            TimeLogger.stopTimeLogger("ParallelDownloadBlob");
-        }
-
-        public void testNoChannel()
-        {
-            // 1. get input blob
-            CloudBlockBlob inputBlob = getInputBlob();
-
-            // 2. get data slices
-            Queue<DataSlice> dataSlices = getDataSlices(inputBlob);
-
-            // 3. test without channel
-            parallelForEachAsync<DataSlice>(dataSlices, readAndWriteTask, 10).Wait();
-        }
-
-        private async Task readAndWriteTask(DataSlice dataSlice)
-        {
-            using (var memoryStream = new MemoryStream())
-            {
-                TimeLogger.startTimeLogger();
-                await getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize);
-                List<T> dataList = getNewReader().readData(memoryStream);
-                String s = JsonConvert.SerializeObject(dataList);
-                await getBlob("TenantMapping/TenantAsnMapping_2021-07-31_test.txt").UploadTextAsync(s);
-                TimeLogger.stopTimeLogger("slice " + dataSlice.id + " completed");
-            }
-        }
-
-        private async Task readSlicesAsync(Queue<DataSlice> dataSlices)
-        {
-            await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, 5);
-
-        }
-
-        private async Task readTaskAsync(DataSlice dataSlice)
-        {
-            using (var memoryStream = new MemoryStream())
-            {
-                TimeLogger.startTimeLogger();
-                // 1. get the memory stream from input blob
-                // 为了避免由于竞争给inputBlob加锁导致的时间损耗，这里每个slice都单独创建一个新的inputBlob
-                await getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize);
-                // 2. read and parse memory stream, put it into the channel
-                TimeLogger.Log("download slice: " + dataSlice.id);
-                //await reader.readAndProduceAsync(memoryStream);
-                //await getNewReader().readAndProduceAsync(memoryStream);
-                await getNewReader().readAndProduceAsync(memoryStream);
-                //TimeLogger.Log("parse and produce slice: " + dataSlice.id);
-                TimeLogger.stopTimeLogger("poduce slice: " + dataSlice.id);
-            }
-        }
-
-        // parallel + async => write
-        private async Task parallelWriteAsync()
-        {
-            List<int> a = new List<int>();
-            for (int i = 0; i < sliceNum; i++)
-            {
-                a.Add(i);
-            }
-            await parallelForEachAsync<int>(a, async (i) =>
-            {
-                //await writer.consumeAndWriteAsync();
-                await getNewWriter().consumeAndWriteAsync();
-                //await getNewWriter().consumeAndWriteAsync();
-                TimeLogger.Log("upload slice: " + i);
-            }, 10);
-            //W writer = getNewWriter();
-            //int i = 0;
-            //try
-            //{
-            //    while (true)
-            //    {
-            //        await writer.consumeAndWriteAsync();
-            //        TimeLogger.Log("upload slice: " + ++i);
-            //    }
-            //} catch (Exception e)
-            //{
-            //    TimeLogger.Log("upload slice complete: " + e.Message);
-            //}
-        }
-
+        // parallel + async foreach execute
         public Task parallelForEachAsync<U>(IEnumerable<U> source, Func<U, Task> funcBody, int maxDoP = 10)
         {
             async Task AwaitPartition(IEnumerator<U> partition)
@@ -388,6 +124,159 @@ namespace DataTransfer
                 .Select(p => AwaitPartition(p)));
         }
 
+        // main code:
+        // parallel + async => read
+        private async Task parallelReadAsync()
+        {
+            // 1. get input blob
+            CloudBlockBlob inputBlob = CloudBlobUtil.getInputBlob();
+
+            // 2. get data slices
+            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
+
+            // 3. start read data slices and put them into channel, parallel and async
+            await readSlicesAsync(sliceQueue);
+        }
+
+        private async Task readSlicesAsync(Queue<DataSlice> dataSlices)
+        {
+            int readerNum = Convert.ToInt32(Environment.GetEnvironmentVariable("ReaderNumParallelAsync"));
+            await parallelForEachAsync<DataSlice>(dataSlices, readTaskAsync, readerNum);
+
+        }
+
+        private async Task readTaskAsync(DataSlice dataSlice)
+        {
+            using (var memoryStream = new MemoryStream())
+            {
+                TimeLogger.startTimeLogger();
+                // 1. get the memory stream from input blob
+                // 为了避免由于竞争给inputBlob加锁导致的时间损耗，这里每个slice都单独创建一个新的inputBlob
+                await CloudBlobUtil.getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize);
+                // 2. read and parse memory stream, put it into the channel
+                TimeLogger.Log("download slice: " + dataSlice.id);
+                //await reader.readAndProduceAsync(memoryStream);
+                await getNewReader().readAndProduceAsync(memoryStream);
+                TimeLogger.stopTimeLogger("poduce slice: " + dataSlice.id);
+            }
+        }
+
+        // main code:
+        // parallel + async => write
+        private async Task parallelWriteAsync()
+        {
+            int writerNum = Convert.ToInt32(Environment.GetEnvironmentVariable("WriterNumParallelAsync"));
+            await parallelForEachAsync<int>(Enumerable.Range(1, this.sliceNum).ToList(), async (i) =>
+            {
+                await getNewWriter().consumeAndWriteAsync();
+                TimeLogger.Log("upload slice: " + i);
+            }, writerNum);
+        }
+
+        // test1: 纯串行
+        public void sequentialExecute()
+        {
+            // 1. get input blob
+            CloudBlockBlob inputBlob = CloudBlobUtil.getInputBlob();
+
+            // 2. get data slices
+            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
+
+            // 3. get a reader and a writer
+            R reader = getNewReader();
+            W writer = getNewWriter();
+
+            // 4. sequential read and write data slice
+            while (sliceQueue.Count() > 0)
+            {
+                using (var memoryStream = new MemoryStream())
+                {
+                    // download data slice stream
+                    DataSlice slice = sliceQueue.Dequeue();
+                    inputBlob.DownloadRangeToStreamAsync(memoryStream, slice.offset, slice.realSize).Wait();
+
+                    // parse the stream to List and send data to target
+                    List<T> messageList = reader.readData(memoryStream);
+                    writer.writeData(messageList);
+
+                    // log
+                    TimeLogger.Log("slice " + slice.id);
+                }
+            }
+        }
+
+        // test2: 纯并行，无channel
+        // 每个线程都需要独立的reader和writer
+        public void parallelExecute()
+        {
+            // 1. get input blob
+            CloudBlockBlob inputBlob = CloudBlobUtil.getInputBlob();
+
+            // 2. get data slices
+            Queue<DataSlice> sliceQueue = getDataSlices(inputBlob);
+
+            Parallel.ForEach(sliceQueue,
+                new ParallelOptions()
+                {
+                    // 最大的并发度
+                    MaxDegreeOfParallelism = 10
+                },
+                (slice) =>
+                {
+                    using (var memoryStream = new MemoryStream())
+                    {
+                        try
+                        {
+                            // download data slice stream
+                            CloudBlobUtil.getInputBlob().DownloadRangeToStreamAsync(memoryStream, slice.offset, slice.realSize).Wait();
+
+                            // parse the stream to List and send data to target
+                            List<T> messageList = getNewReader().readData(memoryStream);
+                            getNewWriter().writeData(messageList);
+
+                            // log
+                            TimeLogger.Log("slice " + slice.id);
+                        }
+                        catch (Exception e)
+                        {
+                            TimeLogger.Log("slice " + slice.id + ": " + e.Message);
+                        }
+                    }
+                }
+            );
+        }
+
+        // test3: 异步并行，无channel
+        public void parallelAsyncWithoutChannel()
+        {
+            // 1. get input blob
+            CloudBlockBlob inputBlob = CloudBlobUtil.getInputBlob();
+
+            // 2. get data slices
+            Queue<DataSlice> dataSlices = getDataSlices(inputBlob);
+
+            // 3. parallel + async without channel
+            parallelForEachAsync<DataSlice>(dataSlices, readAndWriteTask, 10).Wait();
+        }
+
+        private async Task readAndWriteTask(DataSlice dataSlice)
+        {
+            using (var memoryStream = new MemoryStream())
+            {
+                //TimeLogger.startTimeLogger();
+                
+                await CloudBlobUtil.getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize);
+
+                // parse the stream to List and send data to target
+                List<T> messageList = getNewReader().readData(memoryStream);
+                getNewWriter().writeData(messageList);
+
+                // log
+                TimeLogger.Log("slice " + dataSlice.id);
+
+                //TimeLogger.stopTimeLogger("slice " + dataSlice.id + " completed");
+            }
+        }
 
         private class DataSlice
         {
@@ -492,8 +381,17 @@ namespace DataTransfer
             List<T> messages = await consumer.PullAsync();
             return messages;
         }
+
+        public async Task consumeAndWriteAsync()
+        {
+            // 1. consume the messageList from channel
+            List<T> messageList = await getMessages();
+            // 2. upload
+            writeData(messageList);
+        }
+
         // need to be implemented
-        public abstract Task consumeAndWriteAsync();
+        public abstract void writeData(List<T> messageList);
     }
 
     public class myReader : Reader<TenantAsn>
@@ -541,32 +439,13 @@ namespace DataTransfer
 
     public class myWriter : Writer<TenantAsn>
     {
-        public override async Task consumeAndWriteAsync()
+        public override void writeData(List<TenantAsn> tenantAsnList)
         {
-            // 1. consume the messageList from channel
-            List<TenantAsn> tenantAsnList = await getMessages();
-            // 2. upload
-            CloudBlockBlob outputBlob = getOutputBlob();
             String s = JsonConvert.SerializeObject(tenantAsnList);
-            await outputBlob.UploadTextAsync(s);
+            CloudBlobUtil.getOutputBlob().UploadTextAsync(s).Wait();
             tenantAsnList = null;
             GC.Collect();
-            //TimeLogger.Log("upload content : " + s);
         }
 
-        private CloudBlockBlob getOutputBlob()
-        {
-            string storageConnectionString = System.Environment.GetEnvironmentVariable("AzureWebJobsStorage");
-            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(storageConnectionString);
-
-            CloudBlobClient client = storageAccount.CreateCloudBlobClient();
-            CloudBlobContainer container = client.GetContainerReference("shdprod");
-
-            string output = "TenantMapping/TenantAsnMapping_2021-07-31_test.txt";
-            //string output = "TenantMapping/TenantAsnMapping_test.txt";
-            CloudBlockBlob outputBlob = container.GetBlockBlobReference(output);
-
-            return outputBlob;
-        }
     }
 }

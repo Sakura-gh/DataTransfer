@@ -20,10 +20,10 @@ namespace DataTransfer
             TimeLogger.setLogger(log);
             DataTransferFramework<TenantAsn, myReader, myWriter> dataTransfer = new DataTransferFramework<TenantAsn, myReader, myWriter>();
             log.LogInformation("data transfer begin");
-            dataTransfer.start(); // 异步并行，含channel
-            //dataTransfer.testSequentialExecute(); // 纯串行
-            //dataTransfer.testSequentialExecuteParallel(); // 纯同步并行，无channel
-            //dataTransfer.testNoChannel(); // 异步并行，无channel
+            //dataTransfer.start(); // 异步并行，含channel
+            dataTransfer.sequentialExecute(); // 纯串行
+            //dataTransfer.parallelExecute(); // 纯同步并行，无channel
+            //dataTransfer.parallelAsyncWithoutChannel(); // 异步并行，无channel
             log.LogInformation("data transfer end");
             return (ActionResult)new OkObjectResult(new { Result = "Success" });
         }
