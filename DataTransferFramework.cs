@@ -28,18 +28,18 @@ namespace DataTransfer
 
         public void start()
         {
-            // 1. 创建channel，获取producer和consumer
+            // 1. create channel, get the producer and consumer
             initChannel();
             this.producer = new Producer<T>(this.channel.Writer);
             this.consumer = new Consumer<T>(this.channel.Reader);
-            // 2. 执行并发读和写的线程池(起多个线程分别执行reader和writer的核心业务)
-            // 每个线程新建一个reader/writer，避免多线程在reader/writer上竞争导致死锁
+            // 2. execute the read and write threadpool independently, do the core business of reader and writer respectively
+            // each thread should create a new reader or writer, to avoid multi threads compete on the same reader/writer, which would cause deadlock
             Task read = parallelReadAsync();
             Task write = parallelWriteAsync();
             Task.WhenAll(new List<Task> { read, write }).Wait();
         }
 
-        // 使用同一个channel(producer/consumer)传输数据
+        // use the same channel(producer/consumer) to transfer data
         private void initChannel()
         {
             bool isBounded = Convert.ToBoolean(Environment.GetEnvironmentVariable("ChannelBounded"));
@@ -58,7 +58,8 @@ namespace DataTransfer
             }
         }
 
-        // 每个独立的线程都要申请一个独立的reader，避免加锁抢占资源
+        // each independent thread must apply for an independent reader
+        // to avoid locks and preemption of resources
         private R getNewReader()
         {
             var r = new R();
@@ -66,7 +67,8 @@ namespace DataTransfer
             return r;
         }
 
-        // 每个独立的线程都要申请一个独立的writer，避免加锁抢占资源
+        // each independent thread must apply for an independent writer
+        // to avoid locks and preemption of resources
         private W getNewWriter()
         {
             var w = new W();
@@ -74,30 +76,34 @@ namespace DataTransfer
             return w;
         }
 
-        // 任务分片
+        // jobs: data split into slices
         private Queue<DataSlice> getDataSlices(CloudBlockBlob inputBlob)
         {
             inputBlob.FetchAttributesAsync().Wait();
             // Buffer Size: buffer MB chunk, recommand to set 1 MB
             int buffer = Convert.ToInt32(Environment.GetEnvironmentVariable("Buffer"));
             int BUFFER_SIZE = buffer * 1024 * 1024;
-            // blob还剩下多少data
+            // 1 KB for overlap data
+            int OVERLAP_SIZE = 1 * 1024; 
+            // the remaining data in blob
             long blobRemainingSize = inputBlob.Properties.Length;
-            // sliceQueue里保存着给每个线程分配的任务，blob读取的起始位置offset和读取的大小realSize
+            // sliceQueue saves all the tasks assigned to each thread, including
+            // the start read position 'offset' and the read size 'realSize' on the blob
             Queue<DataSlice> sliceQueue = new Queue<DataSlice>();
-            // 初始offset为0
+            // init offset = 0
             long offset = 0;
-            // 初始id为0
+            // init id = 0
             long id = 0;
-            // 往queue里塞初始化好的任务配置
+            // insert the initialized task configuration into the queue
             while (blobRemainingSize > 0)
             {
                 long realSize = (long)Math.Min(BUFFER_SIZE, blobRemainingSize);
                 sliceQueue.Enqueue(new DataSlice(offset, realSize, BUFFER_SIZE, id++));
-                offset += BUFFER_SIZE;
-                blobRemainingSize -= BUFFER_SIZE;
+                offset += BUFFER_SIZE - OVERLAP_SIZE;
+                blobRemainingSize -= BUFFER_SIZE - OVERLAP_SIZE;
             }
             this.sliceNum = sliceQueue.Count();
+            TimeLogger.Log("slices: " + this.sliceNum);
             return sliceQueue;
         }
 
@@ -152,11 +158,12 @@ namespace DataTransfer
             {
                 TimeLogger.startTimeLogger();
                 // 1. get the memory stream from input blob
-                // 为了避免由于竞争给inputBlob加锁导致的时间损耗，这里每个slice都单独创建一个新的inputBlob
+                // in order to avoid the time loss caused by locking the inputBlob due to competition,
+                // here each slice will create a new inputBlob separately
                 await CloudBlobUtil.getInputBlob().DownloadRangeToStreamAsync(memoryStream, dataSlice.offset, dataSlice.realSize);
                 // 2. read and parse memory stream, put it into the channel
                 TimeLogger.Log("download slice: " + dataSlice.id);
-                //await reader.readAndProduceAsync(memoryStream);
+                // also create a new reader
                 await getNewReader().readAndProduceAsync(memoryStream);
                 TimeLogger.stopTimeLogger("poduce slice: " + dataSlice.id);
             }
@@ -175,7 +182,7 @@ namespace DataTransfer
             }, writerNum);
         }
 
-        // test1: 纯串行
+        // test1: sequential execute
         public void sequentialExecute()
         {
             // 1. get input blob
@@ -207,8 +214,8 @@ namespace DataTransfer
             }
         }
 
-        // test2: 纯并行，无channel
-        // 每个线程都需要独立的reader和writer
+        // test2: paralell, without channel
+        // each thread needs a new reader and writer
         public void parallelExecute()
         {
             // 1. get input blob
@@ -248,7 +255,7 @@ namespace DataTransfer
             );
         }
 
-        // test3: 异步并行，无channel
+        // test3: parallel async, without channel
         public void parallelAsyncWithoutChannel()
         {
             // 1. get input blob
@@ -351,9 +358,7 @@ namespace DataTransfer
             // 1. parse the memoryStream to messages
             List<T> dataList = readData(memoryStream);
             // 2. produce each message to channel
-            // 消息队列是一个典型的异步方式，无需加await，本质上就是本线程通知
-            // 要发消息了，然后本线程的任务就完成结束了，接下来具体消息的发送是
-            // 异步的，由新起的一个线程来完成
+            // it just likes the message queue
             await sendMessagesAsync(dataList);
         }
 
@@ -399,7 +404,6 @@ namespace DataTransfer
 
     //public class myReader : Reader<TenantAsn>
     //{
-    //    // 用于保存数据分片时只截取了一半的记录
     //    private Hashtable partialRecordTable = Hashtable.Synchronized(new Hashtable());
 
     //    public override List<TenantAsn> readData(MemoryStream memoryStream)

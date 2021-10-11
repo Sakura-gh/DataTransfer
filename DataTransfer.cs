@@ -24,10 +24,21 @@ namespace DataTransfer
             TimeLogger.setLogger(log);
             DataTransferFramework<TenantAsn, myReader, myWriter> dataTransfer = new DataTransferFramework<TenantAsn, myReader, myWriter>();
             log.LogInformation("data transfer begin");
-            dataTransfer.start(); // 异步并行，含channel
-            //dataTransfer.sequentialExecute(); // 纯串行
-            //dataTransfer.parallelExecute(); // 纯同步并行，无channel
-            //dataTransfer.parallelAsyncWithoutChannel(); // 异步并行，无channel
+
+            //await InfrastructureUnitsUtil.EFZTopology();
+            //await InfrastructureUnitsUtil.EFZTenantMapping();
+            //await InfrastructureUnitsUtil.AsnTopology();
+
+            dataTransfer.start(); // parallel async, with channel
+            //dataTransfer.sequentialExecute(); // serial
+            //dataTransfer.parallelExecute(); // parallel sync, without channel
+            //dataTransfer.parallelAsyncWithoutChannel(); // parallel async, without channel
+
+            // commit, full refresh, just once
+            //await InfrastructureUnitsUtil.AsnTenantMappingFinished(myWriter.guid);
+
+            //log.LogInformation("guid: " + myWriter.guid);
+            
             log.LogInformation("data transfer end");
             return (ActionResult)new OkObjectResult(new { Result = "Success" });
         }
@@ -45,7 +56,7 @@ namespace DataTransfer
 
     public class myReader : Reader<TenantAsn>
     {
-        // 用于保存数据分片时只截取了一半的记录
+        // store the tmp partial record
         private Hashtable partialRecordTable = Hashtable.Synchronized(new Hashtable());
 
         public override List<TenantAsn> readData(MemoryStream memoryStream)
@@ -67,11 +78,11 @@ namespace DataTransfer
                     tenantAsnList.Add(
                         new TenantAsn
                         {
-                            tenantId = splitArray[0],
-                            asn = splitArray[1],
-                            requestCount = splitArray[2],
-                            requestBytes = splitArray[3],
-                            responseBytes = splitArray[4]
+                            tenantId = splitArray[0].Trim().Trim('"'),
+                            asn = splitArray[1].Trim(),
+                            requestCount = splitArray[2].Trim(),
+                            requestBytes = splitArray[3].Trim(),
+                            responseBytes = splitArray[4].Trim()
                         }
                     );
                 }
@@ -88,16 +99,18 @@ namespace DataTransfer
 
     public class myWriter : Writer<TenantAsn>
     {
+        public static Guid guid = Guid.NewGuid();
+
         public override void writeData(List<TenantAsn> tenantAsnList)
         {
             //String s = JsonConvert.SerializeObject(tenantAsnList);
             //CloudBlobUtil.getOutputBlob().UploadTextAsync(s);
 
             // try to load data into db
-            InfrastructureUnitsUtil.TenantMapping(tenantAsnList);
-            
-            tenantAsnList = null;
-            GC.Collect();
+            InfrastructureUnitsUtil.AsnTenantMapping(tenantAsnList, guid).Wait();
+
+            //tenantAsnList = null;
+            //GC.Collect();
         }
 
     }
