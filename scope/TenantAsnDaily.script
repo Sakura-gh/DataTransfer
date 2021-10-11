@@ -1,0 +1,452 @@
+REFERENCE "/shares/exchange.storage.prod/local/Resources/Binaries/Microsoft.Datacenter.Datamining.Cosmos.dll";
+REFERENCE "/shares/exchange.storage.prod/local/Resources/Binaries/Internal.Exchange.Cosmos.dll";
+REFERENCE "/shares/exchange.storage.prod/local/Resources/Binaries/System.Web.dll";
+
+USING Microsoft.Datacenter.Datamining.Cosmos;
+USING Internal.Exchange.Cosmos.Processors;
+USING Internal.Exchange.Cosmos.Reducers;
+USING System.Web;
+
+#DECLARE runDate DateTime = DateTime.SpecifyKind(DateTime.Parse(@@run_date@@), DateTimeKind.Utc).AddDays(-2); // 取两天前的数据
+// #DECLARE runDate DateTime = DateTime.SpecifyKind(DateTime.Parse("{{run_date}}"), DateTimeKind.Utc).AddDays(-2); // 取两天前的数据
+// #DECLARE runDateString string = @@Date@@.Trim(); 
+// #DECLARE runDate DateTime = DateTime.ParseExact(@runDateString, "yyyy-MM-dd", null).AddDays(-3);
+#DECLARE startDate string = @runDate.ToString("yyyy-MM-dd");
+#DECLARE endDate string = @runDate.ToString("yyyy-MM-dd");
+#DECLARE year string = @startDate.Substring(0,4);
+#DECLARE month string = @startDate.Substring(5,2);
+#DECLARE day string = @startDate.Substring(8,2);
+
+#DECLARE one_mb long = 1024 * 1024;
+
+#DECLARE TotalEnabledUserCountFilter long = 50;  //number of enabled EXO mailboxes required to get OMSTenantId details (all IsS500 tenants will be included)
+#DECLARE DominantScopeThreshold long = 100 * @one_mb; //number of request_bytes or response_bytes required to get full scope detail
+
+#DECLARE MoiIPv4Map string = "/shares/Edge.prod/MapOfTheInternet/%Y/%m/%Y-%m-%d/AugmentedRevIP/AugmentedRevIP.ss?date="+ @startDate.Substring(0,10);
+#DECLARE MoiIPv6Map string = "/shares/Edge.prod/MapOfTheInternet/%Y/%m/%Y-%m-%d/AugmentedRevIPv6/AugmentedRevIP.ss?date="+ @startDate.Substring(0,10);
+#DECLARE TenantAsnMapOutput string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tenant_asn_map_{2}.ss", @year, @month, @startDate.Substring(0,10));
+
+#DECLARE AcceptedDomainOutput string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/AcceptedDomain_{2}.ss", @year, @month, @startDate.Substring(0,10));
+#DECLARE CafeStreamTopProtocolsOutput string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/CafeStreamTopProtocols_{2}.ss", @year, @month, @startDate.Substring(0,10));
+#DECLARE TenantOutput string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/Tenant_{2}.ss", @year, @month, @startDate.Substring(0,10));
+#DECLARE TopTenantOutput string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/TopTenant_{2}.ss", @year, @month, @startDate.Substring(0,10));
+#DECLARE TenantWithDomainOutput string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/TenantWidthDomain_{2}.ss", @year, @month, @startDate.Substring(0,10));
+#DECLARE TenantWithIdOutput string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/TenantWidthId_{2}.ss", @year, @month, @startDate.Substring(0,10));
+#DECLARE TenantIdWithPrefixOutput string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/TenantIdWithPrefix_{2}.ss", @year, @month, @startDate.Substring(0,10));
+#DECLARE MoiIPv4Output string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/MoiIPv4_{2}.ss", @year, @month, @startDate.Substring(0,10));
+#DECLARE MoiIPv6Output string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/MoiIPv6_{2}.ss", @year, @month, @startDate.Substring(0,10));
+#DECLARE PrefixTenantWithMoiV4V6Output string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tmp/PrefixTenantWithMoiV4V6_{2}.ss", @year, @month, @startDate.Substring(0,10));
+
+#DECLARE Top200ASNsDataset string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/Top200ASNs.ss");
+
+Top200ASNs = 
+    SELECT *
+    FROM (SSTREAM @Top200ASNsDataset);
+
+MODULE "/shares/IDEAs.Prod.Data/Publish.Profiles.Tenant.Commercial.IDEAsTenantProfile/Resources/v3/IDEAsTenantProfileExtension_v1.module" AS IDEAsTenantProfileExtensionModule;
+
+TenantStream = 
+SELECT  OMSTenantId,
+        ExchangeTenantGUID,
+        State,
+        IsTest,
+        IsS500,
+        MSSalesTopParentOrgId,
+        TenantStatus,
+        IDEAsExternalEnableUsers_v3_EXO AS EXOEnabledUsers
+FROM IDEAsTenantProfileExtensionModule.IDEAsTenantProfileExtensionView
+(
+    HistoryDate = Convert.ToDateTime(@startDate).AddDays(-5), // The snapshot date to use.  Minimum latency is N-5 where N == today.
+    Extensions = new ARRAY<string> { "IDEAsExternalEnableUsers" }
+);
+
+// TenantStream = VIEW @"shares/IDEAs.Prod.Data/Publish.Profiles.Tenant.Commercial.IDEAsTenantProfile/Views/v3/IDEAsTenantProfile.view"
+// PARAMS
+// (
+//     HistoryDate = Convert.ToDateTime(@startDate).AddDays(-5) // The snapshot date to use.  Minimum latency is N-5 where N == today.
+// );
+
+ACCEPTED_DOMAIN = VIEW @"/shares/IDEAs.Prod.Data/Publish.Profiles.Tenant.Commercial.IDEAsTenantDomainProfile/Views/v1/IDEAsTenantDomainProfile.view"
+PARAMS
+(
+    HistoryDate = Convert.ToDateTime(@startDate).AddDays(-5) // The snapshot date to use.  Minimum latency is N-5 where N == today.
+);
+
+// OUTPUT ACCEPTED_DOMAIN
+// TO SSTREAM @AcceptedDomainOutput;
+
+// MapiHttp, Default, Ews, Eas, Rest, Owa, OutlookService, MailboxDelivery
+MapiHttpStream = VIEW @"/shares/exchange.storage.prod/local/Resources/Views/Public/Cafe_SStream.view"
+PARAMS
+(
+    Protocol = "MapiHttp",
+    StartDate = @startDate,
+    EndDate = @endDate,
+    //Buckets = "1024..1024", // A very large bucket that is larger than actual maximum bucket number
+    SparseStreamSet = true           //Bool value of whether to allow missing streams
+);
+
+DefaultStream = VIEW @"/shares/exchange.storage.prod/local/Resources/Views/Public/Cafe_SStream.view"
+PARAMS
+(
+    Protocol = "Default",
+    StartDate = @startDate,
+    EndDate = @endDate,
+    //Buckets = "1024..1024", // A very large bucket that is larger than actual maximum bucket number
+    SparseStreamSet = true           //Bool value of whether to allow missing streams
+);
+
+EwsStream = VIEW @"/shares/exchange.storage.prod/local/Resources/Views/Public/Cafe_SStream.view"
+PARAMS
+(
+    Protocol = "Ews",
+    StartDate = @startDate,
+    EndDate = @endDate,
+    //Buckets = "1024..1024", // A very large bucket that is larger than actual maximum bucket number
+    SparseStreamSet = true           //Bool value of whether to allow missing streams
+);
+
+EasStream = VIEW @"/shares/exchange.storage.prod/local/Resources/Views/Public/Cafe_SStream.view"
+PARAMS
+(
+    Protocol = "Eas",
+    StartDate = @startDate,
+    EndDate = @endDate,
+    //Buckets = "1024..1024", // A very large bucket that is larger than actual maximum bucket number
+    SparseStreamSet = true           //Bool value of whether to allow missing streams
+);
+
+RestStream = VIEW @"/shares/exchange.storage.prod/local/Resources/Views/Public/Cafe_SStream.view"
+PARAMS
+(
+    Protocol = "Rest",
+    StartDate = @startDate,
+    EndDate = @endDate,
+    //Buckets = "1024..1024", // A very large bucket that is larger than actual maximum bucket number
+    SparseStreamSet = true           //Bool value of whether to allow missing streams
+);
+
+OwaStream = VIEW @"/shares/exchange.storage.prod/local/Resources/Views/Public/Cafe_SStream.view"
+PARAMS
+(
+    Protocol = "Owa",
+    StartDate = @startDate,
+    EndDate = @endDate,
+    //Buckets = "1024..1024", // A very large bucket that is larger than actual maximum bucket number
+    SparseStreamSet = true           //Bool value of whether to allow missing streams
+);
+
+OutlookServiceStream = VIEW @"/shares/exchange.storage.prod/local/Resources/Views/Public/Cafe_SStream.view"
+PARAMS
+(
+    Protocol = "OutlookService",
+    StartDate = @startDate,
+    EndDate = @endDate,
+    //Buckets = "1024..1024", // A very large bucket that is larger than actual maximum bucket number
+    SparseStreamSet = true           //Bool value of whether to allow missing streams
+);
+
+// prev_fe == null表示这是路由的第一跳
+// edge_trace_id == null 表示这个流量走的是cafe
+// 请求来源的机器名：source_machine_name => server_host_name
+// 请求前往的BE的机器名：target_server
+// url_host：标识流量属于内部、外部or测试等，可以去除
+// user_agent：用户设备信息，需要过滤掉两种内部检测功能是否完好的请求，1.AMPROBE表示机器给自己发测试请求 2.XAM表示外部给机器发测试请求
+// MapiHttp, Default, Ews, Eas, Rest, Owa, OutlookService
+
+// 获取不同协议下的cafe log，并做简单过滤
+cafeStreamTopProtocols = 
+    SELECT organization, client_socket_address_is_ipv6 AS is_ipv6, request_bytes, response_bytes, request_header_bytes, response_header_bytes, client_socket_address_routing_prefix AS prefix
+    FROM MapiHttpStream
+    WHERE
+        user_type != "Consumer" AND organization.Length > 0 AND string.IsNullOrEmpty(prev_fe) AND string.IsNullOrEmpty(edge_trace_id) AND server_host_name.Length > 3 AND target_server.Length > 3 AND request_header_bytes > 0 AND response_header_bytes > 0 AND NOT user_agent.Contains("AMPROBE") AND NOT user_agent.Contains("XAM")
+    UNION ALL
+    SELECT organization, client_socket_address_is_ipv6 AS is_ipv6, request_bytes, response_bytes, request_header_bytes, response_header_bytes, client_socket_address_routing_prefix AS prefix
+    FROM DefaultStream
+    WHERE 
+        user_type != "Consumer" AND organization.Length > 0 AND string.IsNullOrEmpty(prev_fe) AND string.IsNullOrEmpty(edge_trace_id) AND server_host_name.Length > 3 AND target_server.Length > 3 AND request_header_bytes > 0 AND response_header_bytes > 0 AND NOT user_agent.Contains("AMPROBE") AND NOT user_agent.Contains("XAM")   
+    UNION ALL
+    SELECT organization, client_socket_address_is_ipv6 AS is_ipv6, request_bytes, response_bytes, request_header_bytes, response_header_bytes, client_socket_address_routing_prefix AS prefix
+    FROM EwsStream
+    WHERE 
+        user_type != "Consumer" AND organization.Length > 0 AND string.IsNullOrEmpty(prev_fe) AND string.IsNullOrEmpty(edge_trace_id) AND server_host_name.Length > 3 AND target_server.Length > 3 AND request_header_bytes > 0 AND response_header_bytes > 0 AND NOT user_agent.Contains("AMPROBE") AND NOT user_agent.Contains("XAM")
+    UNION ALL
+    SELECT organization, client_socket_address_is_ipv6 AS is_ipv6, request_bytes, response_bytes, request_header_bytes, response_header_bytes, client_socket_address_routing_prefix AS prefix
+    FROM EasStream
+    WHERE 
+        user_type != "Consumer" AND organization.Length > 0 AND string.IsNullOrEmpty(prev_fe) AND string.IsNullOrEmpty(edge_trace_id) AND server_host_name.Length > 3 AND target_server.Length > 3 AND request_header_bytes > 0 AND response_header_bytes > 0 AND NOT user_agent.Contains("AMPROBE") AND NOT user_agent.Contains("XAM")
+    UNION ALL
+    SELECT organization, client_socket_address_is_ipv6 AS is_ipv6, request_bytes, response_bytes, request_header_bytes, response_header_bytes, client_socket_address_routing_prefix AS prefix
+    FROM RestStream
+    WHERE 
+        user_type != "Consumer" AND organization.Length > 0 AND string.IsNullOrEmpty(prev_fe) AND string.IsNullOrEmpty(edge_trace_id) AND server_host_name.Length > 3 AND target_server.Length > 3 AND request_header_bytes > 0 AND response_header_bytes > 0 AND NOT user_agent.Contains("AMPROBE") AND NOT user_agent.Contains("XAM")
+    UNION ALL
+    SELECT organization, client_socket_address_is_ipv6 AS is_ipv6, request_bytes, response_bytes, request_header_bytes, response_header_bytes, client_socket_address_routing_prefix AS prefix
+    FROM OwaStream
+    WHERE 
+        user_type != "Consumer" AND organization.Length > 0 AND string.IsNullOrEmpty(prev_fe) AND string.IsNullOrEmpty(edge_trace_id) AND server_host_name.Length > 3 AND target_server.Length > 3 AND request_header_bytes > 0 AND response_header_bytes > 0 AND NOT user_agent.Contains("AMPROBE") AND NOT user_agent.Contains("XAM")
+    UNION ALL
+    SELECT organization, client_socket_address_is_ipv6 AS is_ipv6, request_bytes, response_bytes, request_header_bytes, response_header_bytes, client_socket_address_routing_prefix AS prefix
+    FROM OutlookServiceStream
+    WHERE 
+        user_type != "Consumer" AND organization.Length > 0 AND string.IsNullOrEmpty(prev_fe) AND string.IsNullOrEmpty(edge_trace_id) AND server_host_name.Length > 3 AND target_server.Length > 3 AND request_header_bytes > 0 AND response_header_bytes > 0 AND NOT user_agent.Contains("AMPROBE") AND NOT user_agent.Contains("XAM");
+
+// OUTPUT cafeStreamTopProtocols
+// TO SSTREAM @CafeStreamTopProtocolsOutput;
+
+// 获取需要被通知的top tenants，并将具体的Domain和tenantID对应
+// 此时这张表就有了domainName、tenantID，于是可以把damain作为中间桥梁将cafe log和tenantID联系起来
+topTenants =
+SELECT  domains.DomainName.ToLower() AS Domain,
+        OMSTenantId,
+        ExchangeTenantGUID,
+        IsS500,MSSalesTopParentOrgId AS Tpid,
+        TenantStatus,
+        EXOEnabledUsers
+FROM ACCEPTED_DOMAIN AS domains
+INNER JOIN
+    TenantStream
+    ON domains.OMSTenantId == TenantStream.OMSTenantId
+// 不是test，state是active，tenantID是合法的，公司满足一定的人数，且不是试用版；此外还要加上被挑选出的前500个大客户(special)
+// WHERE State=="Active" AND IsTest == false AND
+//     (
+//         TenantStatus != "Trial" OR IsS500 == true
+//     );
+WHERE State=="Active" AND IsTest == false AND
+    (
+        (EXOEnabledUsers >= @TotalEnabledUserCountFilter AND TenantStatus != "Trial")
+     OR IsS500 == true
+    );
+
+OUTPUT topTenants
+TO SSTREAM @TopTenantOutput;
+
+// 获取带domain的cafe log
+// organization包含"."，则是domain域名
+PerDaybyTenantWithOrganizationDomain =
+SELECT  organization.ToLower() AS organization,
+        prefix,
+        is_ipv6, 
+        (long)COUNT(*) AS request_count,
+        (long)SUM(IF(IsStringLongValue(request_bytes),request_header_bytes + long.Parse(request_bytes),0)) AS request_bytes,
+        (long)SUM(IF(IsStringLongValue(response_bytes),response_header_bytes + long.Parse(response_bytes),0)) AS response_bytes
+FROM cafeStreamTopProtocols
+WHERE organization.Contains(".")
+GROUP BY organization, prefix, is_ipv6; 
+
+// 获取带tenantID的cafe log
+// organization不包含"."，则直接是tenantID
+PerDaybyTenantWithOrganizationTenantId =
+SELECT  organization.ToLower() AS organization,
+        prefix,
+        is_ipv6,  
+        (long)COUNT(*) AS request_count,
+        (long)SUM(IF(IsStringLongValue(request_bytes),request_header_bytes + long.Parse(request_bytes),0)) AS request_bytes,
+        (long)SUM(IF(IsStringLongValue(response_bytes),response_header_bytes + long.Parse(response_bytes),0)) AS response_bytes
+FROM cafeStreamTopProtocols
+WHERE !organization.Contains(".")
+GROUP BY organization, prefix, is_ipv6; 
+ 
+// OUTPUT PerDaybyTenantWithOrganizationDomain
+// TO SSTREAM @TenantWithDomainOutput;
+
+// OUTPUT PerDaybyTenantWithOrganizationTenantId
+// TO SSTREAM @TenantWithIdOutput;
+
+// 利用含domain和tenantID的topTenants表，将带domain的cafe log和带tenantID的cafe log进行合并
+// 此时cafe log成功带上了对应的tenant信息
+DominantPerDaybyTenantAll =
+SELECT  organization,
+        TenantStatus,
+        OMSTenantId,
+        IsS500,
+        // TotalUsers,
+        EXOEnabledUsers,
+        prefix,
+        is_ipv6,
+        SUM(request_count) AS request_count,
+        SUM(request_bytes) AS request_bytes,
+        SUM(response_bytes) AS response_bytes
+FROM PerDaybyTenantWithOrganizationDomain
+INNER JOIN
+    topTenants
+    ON PerDaybyTenantWithOrganizationDomain.organization == topTenants.Domain
+//WHERE request_bytes >= @DominantScopeThreshold OR response_bytes >= @DominantScopeThreshold
+GROUP BY organization,TenantStatus,OMSTenantId,IsS500,EXOEnabledUsers,prefix,is_ipv6 
+UNION ALL
+SELECT  organization,
+        TenantStatus,
+        OMSTenantId,
+        IsS500,
+        // TotalUsers,
+        EXOEnabledUsers,
+        prefix,
+        is_ipv6,
+        SUM(request_count) AS request_count,
+        SUM(request_bytes) AS request_bytes,
+        SUM(response_bytes) AS response_bytes
+FROM PerDaybyTenantWithOrganizationTenantId
+INNER JOIN
+    topTenants
+    ON PerDaybyTenantWithOrganizationTenantId.organization == topTenants.OMSTenantId
+//WHERE request_bytes >= @DominantScopeThreshold OR response_bytes >= @DominantScopeThreshold
+GROUP BY organization,TenantStatus,OMSTenantId,IsS500,EXOEnabledUsers,prefix,is_ipv6;
+
+// 对带tenant信息的cafe log按照tenantID和prefix(表示地域)进行group
+DominantPerDaybyTenant = SELECT
+        //TenantStatus,
+        OMSTenantId,
+       // IsS500,
+        //TotalUsers,
+        //EXOEnabledUsers,
+        prefix,
+        is_ipv6,
+        IF(is_ipv6 == false,null,GetIpv6ByteString(prefix)) AS moi_ipv6_prefix,
+        SUM(request_count) AS request_count,
+        SUM(request_bytes) AS request_bytes,
+        SUM(response_bytes) AS response_bytes
+FROM DominantPerDaybyTenantAll
+GROUP BY OMSTenantId, prefix, is_ipv6, moi_ipv6_prefix;
+
+// OUTPUT DominantPerDaybyTenant
+// TO SSTREAM @TenantIdWithPrefixOutput;
+
+//TODO: join IPv6 MOI data into same schema so join works for IPv6 prefixes (need to convert (string)StartIP into long(Bucket))
+//MOI IPv6 Prefix value (025A:13FF:FE0C:1DD3) can be IPv6/64, not clear if all are IPv6/64. Footprint is always IPv6/48, Cafe is always IPv6/64
+//Select unique bucket based on worst accuracyKm (to eliminate duplicates), might switch to bucket where bucket equals StartIP and EndIP (don't know if that always works)
+
+// ipv4: bucket(表示地域)和asn的关系
+// bucket可以理解为是prefix另一种形式的表示，prefix是IP range，默认ipv4掩码24bit，ipv6掩码48bit
+// 实际上Bucket/Prefix表示的是一个range，而accuracyKm是表示精度范围，我们选取该range下最大的范围(最大的圈)
+MoiIPv4Stream = 
+SELECT  (long)Bucket AS Bucket,
+        latitude,
+        longitude,
+        accuracyKm,
+        asn,
+        metro,
+        country,
+        asnName,
+        ROW_NUMBER() OVER(PARTITION BY Bucket ORDER BY accuracyKm DESC) AS RowNum
+FROM (SSTREAM @MoiIPv4Map) AS MoiIPv4
+INNER JOIN 
+    Top200ASNs 
+    ON Top200ASNs.ASN == MoiIPv4.asn
+HAVING RowNum == 1;
+
+// ipv6: prefix(表示地域)和asn的关系
+MoiIPv6Stream = 
+SELECT  Prefix,
+        asn,
+        country,
+        asnName,
+        accuracyKm,
+        ROW_NUMBER() OVER(PARTITION BY Prefix ORDER BY accuracyKm DESC) AS RowNum
+FROM (SSTREAM @MoiIPv6Map) AS MoiIPv6
+INNER JOIN 
+    Top200ASNs 
+    ON Top200ASNs.ASN == MoiIPv6.asn
+HAVING RowNum == 1;
+
+OUTPUT MoiIPv4Stream
+TO SSTREAM @MoiIPv4Output;
+
+OUTPUT MoiIPv6Stream
+TO SSTREAM @MoiIPv6Output;
+
+// 根据prefix(地域信息)，将cafe log与ipv4/ipv6表进行join，得到tenant和asn的对应关系
+// 根据ipv4的bucket和prefix进行join；根据ipv6的Prefix和moi_ipv6_prefix进行join
+// 此时把cafe log和运营商信息asn联系起来了
+PrefixTenantWithMoiV4V6 = 
+SELECT  //organization,
+        //TenantStatus,
+        OMSTenantId,
+        //IsS500,
+        //TotalUsers,
+        //EXOEnabledUsers,
+        prefix,
+        asn,
+        // metro,
+        // country,
+        request_count,
+        request_bytes,
+        response_bytes
+FROM DominantPerDaybyTenant
+LEFT OUTER JOIN MoiIPv4Stream
+    ON DominantPerDaybyTenant.prefix == MoiIPv4Stream.Bucket
+WHERE is_ipv6 == false
+//GROUP BY organization,TenantStatus,OMSTenantId,IsS500,TotalUsers,EXOEnabledUsers,source_EFZ,request_count,
+UNION ALL
+SELECT  //organization,
+        //TenantStatus,
+        OMSTenantId,
+        //IsS500,
+        //TotalUsers,
+        //EXOEnabledUsers,
+        prefix,
+        asn,
+        // metro,
+        // country,
+        request_count,
+        request_bytes,
+        response_bytes
+FROM DominantPerDaybyTenant
+LEFT OUTER JOIN MoiIPv6Stream
+    ON DominantPerDaybyTenant.moi_ipv6_prefix == MoiIPv6Stream.Prefix 
+WHERE is_ipv6 == true;
+
+// OUTPUT PrefixTenantWithMoiV4V6
+// TO SSTREAM @PrefixTenantWithMoiV4V6Output;
+
+// 获取tenant、asn、请求流量的表
+// 最终拿到的信息：哪一个tenant通过哪一个asn，在什么时候发了多少流量
+// 只保留TenantId和asn，就可以得到map关系
+PrefixTenantWithMoi = SELECT
+    OMSTenantId,
+    asn,
+    SUM(request_count) AS request_count,
+    SUM(request_bytes) AS request_bytes,
+    SUM(response_bytes) AS response_bytes
+FROM PrefixTenantWithMoiV4V6
+WHERE NOT string.IsNullOrEmpty(OMSTenantId.ToString()) AND NOT string.IsNullOrEmpty(asn.ToString()) 
+GROUP BY OMSTenantId, asn;
+
+OUTPUT PrefixTenantWithMoi
+TO SSTREAM @TenantAsnMapOutput;
+
+#CS
+public static bool IsStringLongValue(string strLongValue)
+{    
+    long result;
+    if (long.TryParse(strLongValue, out result))
+       return true;
+    else
+       return false;
+}
+
+internal static string GetIpv6ByteString(long IpPrefix)
+{
+    System.Net.IPAddress MyIP;
+    // The network order bytes
+    byte[] addressBytes = BitConverter.GetBytes(System.Net.IPAddress.HostToNetworkOrder(IpPrefix));
+    Array.Resize(ref addressBytes, 16);
+    MyIP = new System.Net.IPAddress(addressBytes);
+    string MyNewIP = null;
+    string MyNewIpPart = null;
+    string[] MyIpArray = MyIP.ToString().Split(':');
+    foreach (string MyIpPart in MyIpArray)
+    {
+        MyNewIpPart = MyIpPart;
+        if (MyIpPart.Length > 0)
+        {
+            for (int i = MyIpPart.Length; i < 4; i++)
+            {
+                MyNewIpPart = "0" + MyNewIpPart;
+            }
+            MyNewIP = MyNewIP + MyNewIpPart.ToUpper();
+        }
+    }
+    return MyNewIP;
+}
+#ENDCS
+

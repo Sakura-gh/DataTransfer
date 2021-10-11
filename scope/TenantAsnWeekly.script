@@ -1,0 +1,58 @@
+REFERENCE "/shares/exchange.storage.prod/local/Resources/Binaries/Microsoft.Datacenter.Datamining.Cosmos.dll";
+REFERENCE "/shares/exchange.storage.prod/local/Resources/Binaries/Internal.Exchange.Cosmos.dll";
+REFERENCE "/shares/exchange.storage.prod/local/Resources/Binaries/System.Web.dll";
+
+USING Microsoft.Datacenter.Datamining.Cosmos;
+USING Internal.Exchange.Cosmos.Processors;
+USING Internal.Exchange.Cosmos.Reducers;
+USING System.Web;
+
+#DECLARE runDate DateTime = DateTime.SpecifyKind(DateTime.Parse(@@run_date@@), DateTimeKind.Utc).AddDays(-3); // 取3天前的数据
+
+#DECLARE startDate string = @runDate.ToString("yyyy-MM-dd");
+#DECLARE year string = @startDate.Substring(0,4);
+#DECLARE month string = @startDate.Substring(5,2);
+#DECLARE TenantAsnMap string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tenant_asn_map_{2}.ss", @year, @month, @startDate.Substring(0,10));
+
+#DECLARE startDate2 string = @runDate.AddDays(-1).ToString("yyyy-MM-dd");
+#DECLARE TenantAsnMap2 string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tenant_asn_map_{2}.ss", @year, @month, @startDate2.Substring(0,10));
+
+#DECLARE startDate3 string = @runDate.AddDays(-2).ToString("yyyy-MM-dd");
+#DECLARE TenantAsnMap3 string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tenant_asn_map_{2}.ss", @year, @month, @startDate3.Substring(0,10));
+
+#DECLARE startDate4 string = @runDate.AddDays(-3).ToString("yyyy-MM-dd");
+#DECLARE TenantAsnMap4 string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tenant_asn_map_{2}.ss", @year, @month, @startDate4.Substring(0,10));
+
+#DECLARE startDate5 string = @runDate.AddDays(-4).ToString("yyyy-MM-dd");
+#DECLARE TenantAsnMap5 string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tenant_asn_map_{2}.ss", @year, @month, @startDate5.Substring(0,10));
+
+#DECLARE startDate6 string = @runDate.AddDays(-5).ToString("yyyy-MM-dd");
+#DECLARE TenantAsnMap6 string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tenant_asn_map_{2}.ss", @year, @month, @startDate6.Substring(0,10));
+
+#DECLARE startDate7 string = @runDate.AddDays(-6).ToString("yyyy-MM-dd");
+#DECLARE TenantAsnMap7 string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/tenant_asn_map_{2}.ss", @year, @month, @startDate7.Substring(0,10));
+
+#DECLARE TenantAsnMapWeeklyOutput string = string.Format("/local/Aggregated/Datasets/Public/M365Networking/SHD/TenantMapping/TenantAsnMapping/prod/weekly/tenant_asn_map_weekly_{2}.ss", @year, @month, @startDate.Substring(0,10));
+
+TenantAsnMapAll =     
+    SELECT * FROM (SSTREAM @TenantAsnMap)
+    UNION ALL
+    SELECT * FROM (SSTREAM @TenantAsnMap2)
+    UNION ALL
+    SELECT * FROM (SSTREAM @TenantAsnMap3)
+    UNION ALL
+    SELECT * FROM (SSTREAM @TenantAsnMap4)
+    UNION ALL
+    SELECT * FROM (SSTREAM @TenantAsnMap5)
+    UNION ALL
+    SELECT * FROM (SSTREAM @TenantAsnMap6)
+    UNION ALL
+    SELECT * FROM (SSTREAM @TenantAsnMap7);
+
+TenantAsnMapWeekly = 
+SELECT OMSTenantId, asn, SUM(request_count) AS request_count, SUM(request_bytes) AS request_bytes, SUM(response_bytes) AS response_bytes 
+FROM TenantAsnMapAll
+GROUP BY OMSTenantId, asn;
+
+OUTPUT TenantAsnMapWeekly
+TO SSTREAM @TenantAsnMapWeeklyOutput;
